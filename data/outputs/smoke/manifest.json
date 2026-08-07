@@ -1,0 +1,139 @@
+{
+  "format_version": 1,
+  "config": {
+    "language": {
+      "graph": "grid-4x4",
+      "code": {
+        "type": "prefix-free",
+        "base_size": 3,
+        "power_x": 6,
+        "max_tries": 10000,
+        "depth_range": [
+          1,
+          4
+        ]
+      },
+      "k": 4,
+      "assignment": "disjoint-random"
+    },
+    "data": {
+      "walk_len": [
+        8,
+        32
+      ],
+      "pool_tokens": 2000000,
+      "split": [
+        98.0,
+        1.0,
+        1.0
+      ],
+      "seed": 42,
+      "noise": null,
+      "context_len": 512
+    }
+  },
+  "config_hash": "0ea38e430ceb488f",
+  "certification": {
+    "code": {
+      "size": 64,
+      "min_len": 7,
+      "max_len": 12,
+      "prefix_free": true,
+      "suffix_free": false,
+      "uniquely_decipherable": true,
+      "regime": "prefix-free"
+    },
+    "codebooks": {
+      "num_vertices": 16,
+      "k": 4,
+      "pairwise_disjoint": true,
+      "adjacent_disjoint": true,
+      "theorem_d1": true,
+      "violations": []
+    },
+    "regime": "prefix-free",
+    "unique_decoding": true,
+    "notes": []
+  },
+  "stats": {
+    "splits": {
+      "train": {
+        "num_sentences": 9725,
+        "total_bits": 1960134,
+        "sentence_bits": {
+          "min": 67,
+          "max": 340,
+          "mean": 201.55619537275064
+        },
+        "walk_len": {
+          "min": 8,
+          "max": 32,
+          "mean": 20.038457583547558
+        },
+        "codeword_bits": {
+          "min": 7,
+          "max": 12,
+          "mean": 10.058468548908525
+        },
+        "num_noised": 0
+      },
+      "valid": {
+        "num_sentences": 99,
+        "total_bits": 20113,
+        "sentence_bits": {
+          "min": 79,
+          "max": 331,
+          "mean": 203.16161616161617
+        },
+        "walk_len": {
+          "min": 8,
+          "max": 32,
+          "mean": 20.2020202020202
+        },
+        "codeword_bits": {
+          "min": 7,
+          "max": 12,
+          "mean": 10.0565
+        },
+        "num_noised": 0
+      },
+      "test": {
+        "num_sentences": 100,
+        "total_bits": 19870,
+        "sentence_bits": {
+          "min": 73,
+          "max": 334,
+          "mean": 198.7
+        },
+        "walk_len": {
+          "min": 8,
+          "max": 32,
+          "mean": 19.76
+        },
+        "codeword_bits": {
+          "min": 7,
+          "max": 12,
+          "mean": 10.055668016194332
+        },
+        "num_noised": 0
+      }
+    },
+    "codeword_pool_size": 64,
+    "codeword_length_histogram": {
+      "7": 2,
+      "8": 7,
+      "9": 8,
+      "10": 21,
+      "11": 19,
+      "12": 7
+    },
+    "entropy_floor_bits_per_token": 0.39105646719899945,
+    "entropy_floor_samples": 64
+  },
+  "files": {
+    "train": "train.jsonl",
+    "valid": "valid.jsonl",
+    "test": "test.jsonl",
+    "codebook": "codebook.json"
+  }
+}

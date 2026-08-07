@@ -1,0 +1,13 @@
+{
+  "out_dir": "/Users/ngoctanlai/Documents/ML/LLM_explaination/synthetic-language-and-thinking/model/outputs/smoke_micro",
+  "device": "mps",
+  "num_params": 1050368,
+  "steps": 1000,
+  "first_train_bits_per_token": 2.073134079931222,
+  "last_train_bits_per_token": 0.5540498059781641,
+  "best_valid_bits_per_token": 0.5623326516947612,
+  "final_valid_bits_per_token_sentence_aligned": 0.5666910393872842,
+  "entropy_floor_bits_per_token": 0.39105646719899945,
+  "gap_to_floor": 0.1756345721882847,
+  "elapsed_s": 865.5745651721954
+}

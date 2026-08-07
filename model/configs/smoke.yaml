@@ -1,0 +1,24 @@
+# Tiny model on the smoke dataset (grid-4x4, prefix-free, entropy floor 0.3911 bits/token).
+# Paths are resolved relative to this file.
+model:
+  size: micro          # d_model 128, 4 layers, 4 heads (see SIZE_PRESETS)
+  context_len: 512
+
+data:
+  dataset_dir: ../data/outputs/smoke
+  mode: frozen         # frozen | streaming
+
+train:
+  max_steps: 2000
+  batch_size: 32
+  lr: 3.0e-4
+  warmup: 100
+  log_every: 50
+  eval_every: 250
+  seed: 42
+  out_dir: outputs/smoke_micro
+
+eval:
+  n_samples: 200
+  temperature: 1.0
+  cuts: [0, 50]

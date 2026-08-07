@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synthmodel"
+version = "0.1.0"
+description = "Llama-style decoder-only transformers trained on the synthetic graph-walk language"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.1", "pyyaml>=6.0"]
+
+# `synthdata` (the sibling ../data package) is deliberately NOT a dependency here:
+# _paths.py prepends ../data to sys.path when synthdata is not already importable,
+# so nothing needs installing. `pip install -e ../data` also works and takes
+# precedence. See README section "Integration with the data side".
+
+# The modules live flat in this directory (config.py, model.py, data.py, sample.py,
+# evals.py, train.py); scripts/ add this directory to sys.path directly, so no
+# package install is required to use the CLIs.
+[tool.setuptools]
+py-modules = ["_paths", "config", "model", "data", "sample", "evals", "train"]
