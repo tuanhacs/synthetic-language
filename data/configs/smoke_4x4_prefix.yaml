@@ -1,7 +1,7 @@
 # Smoke config: smallest language that exercises the whole pipeline.
 # grid 4x4 (|V| = 16), prefix-free base code of 3 words, pool C^6 = 729 codewords.
 language:
-  graph: grid-4x4 # |V| = 16
+  graph: grid-6x6 # |V| = 16
   code:
     type: prefix-free # prefix-free | suffix-free | ud
     base_size: 3 # codewords of the base code C
@@ -11,7 +11,7 @@ language:
   assignment: disjoint-random # pairwise disjoint B_v
 data:
   walk_len: [4, 12] # vertices per walk, uniform in this range
-  pool_tokens: 2_000_000 # total bits in the frozen pool
+  pool_tokens: 3_000_000 # total bits in the frozen pool
   split: [98, 1, 1] # train / valid / test, disjoint at string level
   seed: 42
   noise: null # {type: bit-flip|bit-delete|vertex-noise, gamma, rho}
