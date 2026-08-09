@@ -11,8 +11,8 @@ language:
   assignment: disjoint-random # pairwise disjoint B_v
 data:
   walk_len: [32, 36] # vertices per walk, uniform in this range
-  pool_tokens: 8_000_000 # total bits in the frozen pool
-  split: [60, 20, 20] # train / valid / test, disjoint at string level
+  pool_tokens: 15_000_000 # total bits in the frozen pool
+  split: [80, 10, 10] # train / valid / test, disjoint at string level
   seed: 42
   noise: null # {type: bit-flip|bit-delete|vertex-noise, gamma, rho}
   context_len: 512 # training context (packing + length warnings)
