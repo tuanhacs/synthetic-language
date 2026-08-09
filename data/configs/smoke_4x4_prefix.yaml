@@ -10,7 +10,7 @@ language:
   k: 4 # codewords per vertex
   assignment: disjoint-random # pairwise disjoint B_v
 data:
-  walk_len: [4, 8] # vertices per walk, uniform in this range
+  walk_len: [4, 12] # vertices per walk, uniform in this range
   pool_tokens: 2_000_000 # total bits in the frozen pool
   split: [98, 1, 1] # train / valid / test, disjoint at string level
   seed: 42
