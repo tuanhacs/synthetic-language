@@ -21,7 +21,7 @@ are attributable to `(N params, D tokens, language difficulty)` and nothing else
 * **SwiGLU** MLP, hidden width `4 * d_model` (gate style: three matrices)
 * **no biases** anywhere
 * **weight tying**: `lm_head.weight is embed.weight`
-* no GQA, no MoE, no KV cache
+* no GQA or MoE; generation uses a per-layer KV cache
 
 Vocabulary is `{0, 1, BOS, EOS, PAD}` = **5 tokens**, taken from `synthdata`'s
 `BitTokenizer`; `build_model` asserts the two agree. Because the vocabulary is so

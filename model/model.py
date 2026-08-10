@@ -16,6 +16,9 @@ import torch.nn.functional as F
 
 from config import ModelConfig
 
+KVCache = tuple[torch.Tensor, torch.Tensor]
+ModelCache = tuple[KVCache, ...]
+
 
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-5) -> None:
@@ -74,6 +77,50 @@ class Attention(nn.Module):
         )
         return self.o_proj(y.transpose(1, 2).reshape(b, t, -1))
 
+    def forward_cached(
+        self,
+        x: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        cache: KVCache | None = None,
+    ) -> tuple[torch.Tensor, KVCache]:
+        """Attention with a generation-only KV cache.
+
+        A cache-free call may prefill several tokens and uses ordinary causal
+        attention. Once a cache exists, callers append exactly one token; its
+        query may attend to every cached key plus its own key.
+        """
+        b, t, _ = x.shape
+        if cache is not None and t != 1:
+            raise ValueError("cached attention appends exactly one token at a time")
+
+        shape = (b, t, self.n_heads, self.head_dim)
+        q = self.q_proj(x).view(shape).transpose(1, 2)
+        k = self.k_proj(x).view(shape).transpose(1, 2)
+        v = self.v_proj(x).view(shape).transpose(1, 2)
+        q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
+
+        if cache is None:
+            all_k, all_v = k, v
+            is_causal = t > 1
+        else:
+            past_k, past_v = cache
+            if past_k.shape[:2] != k.shape[:2] or past_k.shape[-1] != k.shape[-1]:
+                raise ValueError("KV cache shape does not match the current batch/model")
+            all_k = torch.cat((past_k, k), dim=2)
+            all_v = torch.cat((past_v, v), dim=2)
+            is_causal = False
+
+        y = F.scaled_dot_product_attention(
+            q,
+            all_k,
+            all_v,
+            is_causal=is_causal,
+            dropout_p=self.dropout if self.training else 0.0,
+        )
+        out = self.o_proj(y.transpose(1, 2).reshape(b, t, -1))
+        return out, (all_k, all_v)
+
 
 class SwiGLU(nn.Module):
     def __init__(self, cfg: ModelConfig) -> None:
@@ -98,6 +145,17 @@ class Block(nn.Module):
     def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
         x = x + self.drop(self.attn(self.attn_norm(x), cos, sin))
         return x + self.drop(self.mlp(self.mlp_norm(x)))
+
+    def forward_cached(
+        self,
+        x: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        cache: KVCache | None = None,
+    ) -> tuple[torch.Tensor, KVCache]:
+        attn_out, new_cache = self.attn.forward_cached(self.attn_norm(x), cos, sin, cache)
+        x = x + self.drop(attn_out)
+        return x + self.drop(self.mlp(self.mlp_norm(x))), new_cache
 
 
 class Model(nn.Module):
@@ -140,6 +198,48 @@ class Model(nn.Module):
         for block in self.blocks:
             x = block(x, cos, sin)
         return self.lm_head(self.norm(x))
+
+    def forward_cached(
+        self,
+        idx: torch.Tensor,
+        cache: ModelCache | None = None,
+    ) -> tuple[torch.Tensor, ModelCache]:
+        """Generation forward returning logits and reusable per-layer K/V.
+
+        The first call pre-fills ``(B, T)`` tokens. Later calls append one
+        ``(B, 1)`` token. Cached keys already contain their RoPE rotation.
+        """
+        if self.training:
+            raise RuntimeError("forward_cached is generation-only; call model.eval() first")
+        _, t = idx.shape
+        if t < 1:
+            raise ValueError("forward_cached needs at least one token")
+        if cache is not None and len(cache) != len(self.blocks):
+            raise ValueError(
+                f"KV cache has {len(cache)} layers, model has {len(self.blocks)}"
+            )
+
+        past_len = 0 if cache is None else cache[0][0].shape[2]
+        if cache is not None:
+            if t != 1:
+                raise ValueError("a populated KV cache accepts one new token")
+            if any(layer_cache[0].shape[2] != past_len for layer_cache in cache):
+                raise ValueError("all KV-cache layers must have the same sequence length")
+        total_len = past_len + t
+        if total_len > self.cfg.context_len:
+            raise ValueError(
+                f"cached sequence length {total_len} exceeds context_len {self.cfg.context_len}"
+            )
+
+        cos = self.rope_cos[past_len:total_len]
+        sin = self.rope_sin[past_len:total_len]
+        x = self.drop(self.embed(idx))
+        new_cache: list[KVCache] = []
+        for layer, block in enumerate(self.blocks):
+            layer_cache = None if cache is None else cache[layer]
+            x, updated = block.forward_cached(x, cos, sin, layer_cache)
+            new_cache.append(updated)
+        return self.lm_head(self.norm(x)), tuple(new_cache)
 
     def num_params(self, non_embedding: bool = False) -> int:
         """Total parameter count (the embedding is tiny: vocab_size * d_model)."""

@@ -2,9 +2,8 @@
 
 Sampling starts from ``BOS`` (generation from scratch, ``cut = 0``) or from
 ``BOS + prefix_bits`` (completion of a valid prefix, ``cut = k``) and stops at EOS
-or ``max_len``. Batched, with a plain KV-free forward pass: contexts are short
-(<= 512 tokens) and the models are tiny, so recomputing the prefix each step is
-fast enough and keeps the model code free of cache plumbing.
+or ``max_len``. Generation pre-fills a per-layer KV cache once, then evaluates
+only the newly sampled token at each subsequent step.
 """
 
 from __future__ import annotations
@@ -74,32 +73,48 @@ def _generate_batch(
     rng: torch.Generator | None,
     forbid_bos: bool,
 ) -> list[str]:
-    """Generate one batch; prefixes of unequal length are left-padded logically.
+    """Generate one batch with a KV cache.
 
-    Ragged prefixes are handled by grouping: sequences are grown together and a
-    finished row simply stops being updated. Prefixes are usually all the same
-    length (a fixed cut), so the common case is a single dense batch.
+    RoPE positions and KV-cache lengths must agree within a dense batch, so
+    ragged prefixes are split into same-length groups and restored to their
+    original order. Fixed-cut evaluation takes the single-group path.
     """
     tok = tokenizer
     seqs = [tok.encode(p, bos=True, eos=False) for p in prefixes]
-    max_prefix = max(len(s) for s in seqs)
-    if max_prefix >= max_len:
-        raise ValueError(f"prefix length {max_prefix} leaves no room within max_len {max_len}")
+    lengths = [len(seq) for seq in seqs]
+    longest = max(lengths)
+    if longest >= max_len:
+        raise ValueError(f"prefix length {longest} leaves no room within max_len {max_len}")
+
+    if len(set(lengths)) > 1:
+        groups: dict[int, list[int]] = {}
+        for row, length in enumerate(lengths):
+            groups.setdefault(length, []).append(row)
+        ordered = [""] * len(prefixes)
+        for rows in groups.values():
+            group_out = _generate_batch(
+                model,
+                tok,
+                [prefixes[row] for row in rows],
+                temperature,
+                max_len,
+                device,
+                rng,
+                forbid_bos,
+            )
+            for row, string in zip(rows, group_out):
+                ordered[row] = string
+        return ordered
 
     b = len(seqs)
-    # Right-pad to a rectangle and track true lengths, so short rows keep growing
-    # from their own position.
-    width = max_prefix
-    ids = torch.full((b, width), tok.PAD, dtype=torch.long, device=device)
-    for row, seq in enumerate(seqs):
-        ids[row, : len(seq)] = torch.tensor(seq, dtype=torch.long, device=device)
-    lengths = torch.tensor([len(s) for s in seqs], dtype=torch.long, device=device)
+    width = lengths[0]
+    ids = torch.tensor(seqs, dtype=torch.long, device=device)
     done = torch.zeros(b, dtype=torch.bool, device=device)
     generated: list[list[int]] = [[] for _ in range(b)]
+    logits, cache = model.forward_cached(ids)
 
-    for _ in range(max_len - width):
-        logits = model(ids)  # (B, T, V)
-        last = logits[torch.arange(b, device=device), lengths - 1, :].float() / temperature
+    for step in range(max_len - width):
+        last = logits[:, -1, :].float() / temperature
         last[:, tok.PAD] = float("-inf")
         if forbid_bos:
             last[:, tok.BOS] = float("-inf")
@@ -109,16 +124,16 @@ def _generate_batch(
         nxt = torch.multinomial(probs, num_samples=1, generator=rng).squeeze(-1).to(device)
         nxt = torch.where(done, torch.full_like(nxt, tok.PAD), nxt)
 
-        ids = torch.cat([ids, torch.full((b, 1), tok.PAD, dtype=torch.long, device=device)], dim=1)
-        alive = ~done
-        ids[alive, lengths[alive]] = nxt[alive]
         for row in range(b):
             if not done[row] and int(nxt[row]) != tok.EOS:
                 generated[row].append(int(nxt[row]))
         done |= nxt == tok.EOS
-        lengths = lengths + alive.long()
-        if bool(done.all()):
+        if bool(done.all()) or step + 1 == max_len - width:
             break
+        # Finished rows append PAD only to keep every layer cache rectangular;
+        # their subsequent logits are ignored.
+        cache_token = torch.where(done, torch.full_like(nxt, tok.PAD), nxt)
+        logits, cache = model.forward_cached(cache_token[:, None], cache)
 
     return [
         prefixes[row] + "".join(tok.ID_TO_TOKEN[i] for i in generated[row]) for row in range(b)
