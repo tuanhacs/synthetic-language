@@ -6,7 +6,7 @@ See ``../README.md`` and ``../../docs/context.md``.
 """
 
 from .codebooks import Codebooks, CodebookReport, assign, assign_disjoint_random
-from .codes import Code, CodeReport, certify, make_code
+from .codes import Code, CodeReport, certify, load_codeword_pool, make_code
 from .config import (
     CodeConfig,
     Config,
@@ -52,6 +52,7 @@ __all__ = [
     "certify",
     "config_hash",
     "load_config",
+    "load_codeword_pool",
     "load_dataset",
     "make_code",
     "make_grid",

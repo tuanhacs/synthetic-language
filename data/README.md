@@ -107,6 +107,37 @@ data:
   context_len: 512               # training context: used for packing and length warnings.
 ```
 
+To replace the generated `C^x` pool with an existing ordered JSON array of
+codewords, set `language.codeword_pool_file`:
+
+```yaml
+language:
+  graph: grid-4x4
+  codeword_pool_file: ../codeword_pools/my_prefix_pool.json
+  code:
+    type: prefix-free             # the complete external pool is certified
+  k: 4
+  assignment: disjoint-random     # assignment still happens normally
+data:
+  walk_len: [8, 32]               # the new dataset's walk distribution
+  pool_tokens: 2_000_000
+  split: [98, 1, 1]
+  seed: 42
+  noise: null
+  context_len: 512
+```
+
+The canonical JSON format is just `["001", "1010", ...]`;
+`{"codewords": [...]}` is also accepted. The loader preserves array order,
+rejects duplicates/non-binary words and checks that the pool contains at least
+`|V| * k` words. It then runs the normal assignment strategy and certifies the
+assigned `|V| * k` subset against `code.type`. Thus the file replaces only
+`base -> C^x`; graph
+construction, random assignment to vertices, language certification, walk
+sampling, noise, splitting and output storage are unchanged. Relative paths are
+resolved against the YAML file. `base_size`, length range and `power_x` do not
+apply when `codeword_pool_file` is present.
+
 Cross-constraints checked at load time (hard errors): `|C|^x ≥ |V| · k` (disjoint assignment must
 be feasible), `base_size ≥ 2`, `power_x ≥ 1`, `walk_len` min `≥ 2`, valid graph spec, positive
 split. Soft **warnings** are printed for: little pool slack (`< 4 ×` the required number of

@@ -1,0 +1,17 @@
+# Build a dataset from an existing global codeword pool JSON.
+# The file is a JSON array such as ["001", "101", ...].
+language:
+  graph: grid-6x6
+  codeword_pool_file: ../codeword_pools/hard_ud_codebook_200.json
+  code:
+    type: ud # the words assigned from this pool are certified
+  k: 4
+  assignment: disjoint-random # samples |V|*k words, then deals k to each vertex
+
+data:
+  walk_len: [4, 48]
+  pool_tokens: 20_000_000
+  split: [80, 10, 10]
+  seed: 42 # controls assignment, samples, noise and split
+  noise: null
+  context_len: 800

@@ -19,8 +19,15 @@ _HERE = str(Path(__file__).resolve().parent)
 sys.path[:] = [p for p in sys.path if p not in ("", ".", _HERE)]
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import load_config  # noqa: E402
+from config import ConfigError, ModelConfig, SIZE_PRESETS, load_config  # noqa: E402
 from train import train  # noqa: E402
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
 
 
 def main() -> int:
@@ -33,6 +40,9 @@ def main() -> int:
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--device", default=None, help="cuda | mps | cpu (default: auto-detect)")
     ap.add_argument("--size", default=None, help="override model.size preset")
+    ap.add_argument("--d-model", type=positive_int, default=None, help="override model width")
+    ap.add_argument("--n-layers", type=positive_int, default=None, help="override layer count")
+    ap.add_argument("--n-heads", type=positive_int, default=None, help="override attention head count")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -50,21 +60,34 @@ def main() -> int:
     }
     if overrides:
         cfg = dataclasses.replace(cfg, train=dataclasses.replace(cfg.train, **overrides))
+    model_cfg = cfg.model
     if args.size is not None:
-        from config import SIZE_PRESETS, ModelConfig
-
         if args.size not in SIZE_PRESETS:
             ap.error(f"--size must be one of {sorted(SIZE_PRESETS)}")
-        cfg = dataclasses.replace(
-            cfg,
-            model=ModelConfig(
-                size=args.size,
-                context_len=cfg.model.context_len,
-                vocab_size=cfg.model.vocab_size,
-                dropout=cfg.model.dropout,
-                **SIZE_PRESETS[args.size],
-            ),
+        model_cfg = ModelConfig(
+            size=args.size,
+            context_len=model_cfg.context_len,
+            vocab_size=model_cfg.vocab_size,
+            dropout=model_cfg.dropout,
+            **SIZE_PRESETS[args.size],
         )
+
+    model_overrides = {
+        key: value
+        for key, value in {
+            "d_model": args.d_model,
+            "n_layers": args.n_layers,
+            "n_heads": args.n_heads,
+        }.items()
+        if value is not None
+    }
+    if model_overrides:
+        try:
+            model_cfg = dataclasses.replace(model_cfg, **model_overrides)
+        except ConfigError as exc:
+            ap.error(str(exc))
+    if model_cfg is not cfg.model:
+        cfg = dataclasses.replace(cfg, model=model_cfg)
 
     train(cfg)
     return 0

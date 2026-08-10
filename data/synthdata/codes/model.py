@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import itertools
+import json
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterator, Sequence
 
 
@@ -94,3 +96,34 @@ class Code:
     @staticmethod
     def from_list(words: Sequence[str]) -> "Code":
         return Code(tuple(words))
+
+
+def load_codeword_pool(path: str | Path) -> Code:
+    """Load an ordered codeword pool from a JSON array.
+
+    The canonical format is simply ``["001", "101", ...]``. An object with a
+    ``codewords`` array is also accepted for callers that want to attach their
+    own metadata. Array order is preserved because seeded random assignment is
+    defined relative to that order.
+    """
+    source = Path(path)
+    try:
+        # utf-8-sig accepts ordinary UTF-8 and files with the BOM commonly
+        # emitted by Windows tools such as PowerShell and Excel.
+        doc = json.loads(source.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        raise ValueError(f"codeword pool file does not exist: {source}") from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON in codeword pool file {source}: {exc}") from exc
+
+    words = doc.get("codewords") if isinstance(doc, dict) else doc
+    if not isinstance(words, list):
+        raise ValueError(
+            f"codeword pool file {source} must be a JSON array or an object with 'codewords'"
+        )
+    if any(not isinstance(word, str) for word in words):
+        raise ValueError("every codeword in the pool must be a JSON string")
+    try:
+        return Code(tuple(words))
+    except ValueError as exc:
+        raise ValueError(f"invalid codeword pool {source}: {exc}") from exc

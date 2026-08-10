@@ -73,6 +73,7 @@ class LanguageConfig:
     code: CodeConfig = field(default_factory=CodeConfig)
     k: int = 4
     assignment: str = "disjoint-random"
+    codeword_pool_file: str | None = None
 
     @property
     def grid_n(self) -> int:
@@ -90,12 +91,15 @@ class LanguageConfig:
         return self.grid_n**2
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "graph": self.graph,
             "code": self.code.to_dict(),
             "k": self.k,
             "assignment": self.assignment,
         }
+        if self.codeword_pool_file is not None:
+            out["codeword_pool_file"] = self.codeword_pool_file
+        return out
 
 
 @dataclass(frozen=True)
@@ -191,13 +195,15 @@ def parse_config(raw: dict[str, Any]) -> Config:
     lang_raw = dict(raw.get("language") or {})
     data_raw = dict(raw.get("data") or {})
 
-    unknown = set(lang_raw) - {"graph", "code", "k", "assignment"}
+    unknown = set(lang_raw) - {"graph", "code", "k", "assignment", "codeword_pool_file"}
     if unknown:
         raise ConfigError(f"unknown language fields: {sorted(unknown)}")
     unknown = set(data_raw) - {"walk_len", "pool_tokens", "split", "seed", "noise", "context_len"}
     if unknown:
         raise ConfigError(f"unknown data fields: {sorted(unknown)}")
 
+    pool_raw = lang_raw.get("codeword_pool_file")
+    codeword_pool_file = None if pool_raw is None else str(pool_raw).strip()
     assignment = str(lang_raw.get("assignment", "disjoint-random"))
     if assignment not in ASSIGNMENTS:
         raise ConfigError(f"language.assignment must be one of {ASSIGNMENTS}, got {assignment!r}")
@@ -207,6 +213,7 @@ def parse_config(raw: dict[str, Any]) -> Config:
         code=_code_config(dict(lang_raw.get("code") or {})),
         k=int(lang_raw.get("k", 4)),
         assignment=assignment,
+        codeword_pool_file=codeword_pool_file,
     )
 
     split = data_raw.get("split", [98, 1, 1])
@@ -241,25 +248,30 @@ def validate_config(cfg: Config) -> list[str]:
       * worst-case sentence length exceeding ``data.context_len``
       * pool slack below 4x the required number of codewords
     """
-    code = cfg.language.code
-    lo, hi = code.length_range
-    if lo < 1:
-        raise ConfigError("code length/depth range must start at >= 1")
-    if code.base_size < 2:
-        raise ConfigError("code.base_size must be >= 2")
-    if code.power_x < 1:
-        raise ConfigError("code.power_x must be >= 1")
     if cfg.language.k < 1:
         raise ConfigError("language.k must be >= 1")
 
     n_v = cfg.language.num_vertices  # also validates the graph spec
-    pool_size = code.base_size**code.power_x
-    needed = n_v * cfg.language.k
-    if pool_size < needed:
-        raise ConfigError(
-            f"codeword pool too small: |C|^x = {code.base_size}^{code.power_x} = {pool_size} "
-            f"< |V| * k = {n_v} * {cfg.language.k} = {needed}"
-        )
+    external_pool = cfg.language.codeword_pool_file is not None
+    if external_pool:
+        if not cfg.language.codeword_pool_file:
+            raise ConfigError("language.codeword_pool_file must not be empty")
+    else:
+        code = cfg.language.code
+        lo, hi = code.length_range
+        if lo < 1:
+            raise ConfigError("code length/depth range must start at >= 1")
+        if code.base_size < 2:
+            raise ConfigError("code.base_size must be >= 2")
+        if code.power_x < 1:
+            raise ConfigError("code.power_x must be >= 1")
+        pool_size = code.base_size**code.power_x
+        needed = n_v * cfg.language.k
+        if pool_size < needed:
+            raise ConfigError(
+                f"codeword pool too small: |C|^x = {code.base_size}^{code.power_x} = {pool_size} "
+                f"< |V| * k = {n_v} * {cfg.language.k} = {needed}"
+            )
 
     wlo, whi = cfg.data.walk_len
     if wlo < 2:
@@ -270,6 +282,9 @@ def validate_config(cfg: Config) -> list[str]:
         raise ConfigError("data.split must be non-negative with a positive sum")
     if cfg.data.context_len < 8:
         raise ConfigError("data.context_len must be >= 8")
+
+    if external_pool:
+        return []  # file-dependent checks and length warnings run during the build
 
     warnings: list[str] = []
     if pool_size < 4 * needed:

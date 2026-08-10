@@ -14,7 +14,7 @@ from .generate import (
     make_suffix_free,
     make_ud,
 )
-from .model import Code
+from .model import Code, load_codeword_pool
 
 __all__ = [
     "Code",
@@ -23,6 +23,7 @@ __all__ = [
     "certify",
     "is_prefix_free",
     "is_suffix_free",
+    "load_codeword_pool",
     "sardinas_patterson",
     "make_code",
     "make_prefix_free",

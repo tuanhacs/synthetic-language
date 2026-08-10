@@ -119,6 +119,7 @@ Unknown keys are hard errors — a typo never silently trains the wrong thing.
 # train (writes metrics.jsonl, best.pt, last.pt, train_summary.json into out_dir)
 python scripts/train.py configs/smoke.yaml
 python scripts/train.py configs/smoke.yaml --size tiny --max-steps 5000 --out-dir outputs/smoke_tiny
+python scripts/train.py configs/smoke.yaml --d-model 192 --n-layers 6 --n-heads 6
 
 # evaluate a checkpoint: loss vs floor, validity at each cut, diversity/memorisation
 python scripts/evaluate.py outputs/smoke_micro/best.pt
