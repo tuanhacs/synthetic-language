@@ -125,6 +125,8 @@ def eval_validity(
     (never seen in training). Sentences shorter than ``cut + 1`` bits are skipped.
 
     Reported:
+      * ``decodable_pct`` — the bit string can be fully segmented into global
+        codewords, without checking vertex ownership or graph adjacency;
       * ``validity_pct`` — ``language.is_valid(full_bits)``;
       * ``terminated_pct`` — the model emitted EOS itself instead of running into
         ``max_len``;
@@ -157,12 +159,14 @@ def eval_validity(
     )
 
     lo, hi = language.walk_len
-    valid, terminated, valid_term, in_range = 0, 0, 0, 0
+    decodable, valid, terminated, valid_term, in_range = 0, 0, 0, 0, 0
     limit = (max_len or model.cfg.context_len) - 1 - (cut if cut else 0)
     for i, string in enumerate(bits):
         produced = len(string) - (cut if cut else 0)
         stopped_by_eos = produced < limit
+        can_decode = language.is_decodable(string)
         ok = language.is_valid(string)
+        decodable += can_decode
         valid += ok
         terminated += stopped_by_eos
         valid_term += ok and stopped_by_eos
@@ -176,6 +180,7 @@ def eval_validity(
         "cut": cut,
         "temperature": temperature,
         "n_samples": total,
+        "decodable_pct": 100.0 * decodable / total,
         "validity_pct": 100.0 * valid / total,
         "terminated_pct": 100.0 * terminated / total,
         "valid_and_terminated_pct": 100.0 * valid_term / total,
@@ -287,9 +292,12 @@ def format_report(report: dict) -> str:
     for key, res in report["generation"].items():
         div = res["diversity"]
         mem = div["memorisation_frac"]
+        decodable = res.get("decodable_pct")
+        decodable_s = "n/a" if decodable is None else f"{decodable:.1f}%"
         lines.append(
             f"  {key:<6} tau={res['temperature']}  n={res['n_samples']}  "
-            f"valid {res['validity_pct']:.1f}%  valid+EOS {res['valid_and_terminated_pct']:.1f}%  "
+            f"decodable {decodable_s}  valid {res['validity_pct']:.1f}%  "
+            f"valid+EOS {res['valid_and_terminated_pct']:.1f}%  "
             f"terminated {res['terminated_pct']:.1f}%  walk-len-in-range {res['walk_len_in_range_pct']:.1f}%"
         )
         lines.append(

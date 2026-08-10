@@ -96,6 +96,7 @@ class Language:
     # lookups built at init
     _words: list[tuple[str, ...]] = field(init=False, repr=False)
     _by_first_bit: list[tuple[tuple[str, ...], tuple[str, ...]]] = field(init=False, repr=False)
+    _global_by_first_bit: tuple[tuple[str, ...], tuple[str, ...]] = field(init=False, repr=False)
     _max_word_len: int = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -112,6 +113,11 @@ class Language:
             )
             for book in self._words
         ]
+        global_words = self.codebooks.global_code().words
+        self._global_by_first_bit = (
+            tuple(word for word in global_words if word[0] == "0"),
+            tuple(word for word in global_words if word[0] == "1"),
+        )
         self._max_word_len = max(len(w) for book in self._words for w in book)
 
     # ------------------------------------------------------------------ #
@@ -146,6 +152,30 @@ class Language:
     # ------------------------------------------------------------------ #
     # decoding (one general DP for every regime)
     # ------------------------------------------------------------------ #
+
+    def is_decodable(self, bits: str) -> bool:
+        """Whether ``bits`` can be fully segmented into global codewords.
+
+        Vertex ownership and graph adjacency are intentionally ignored.  This
+        is the decoding layer before the stricter grammatical-validity check.
+        """
+        if not bits or any(bit not in "01" for bit in bits):
+            return False
+
+        n = len(bits)
+        reachable = bytearray(n + 1)
+        reachable[0] = 1
+        for i in range(n):
+            if not reachable[i]:
+                continue
+            candidates = self._global_by_first_bit[0 if bits[i] == "0" else 1]
+            for word in candidates:
+                j = i + len(word)
+                if j <= n and bits.startswith(word, i):
+                    if j == n:
+                        return True
+                    reachable[j] = 1
+        return False
 
     def _forward(self, bits: str) -> tuple[list[set[int]], dict[tuple[int, int], list[tuple[int, int]]]]:
         """Reachable states ``(cut position, vertex)`` plus backpointers.

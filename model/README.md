@@ -194,6 +194,8 @@ Outputs in `out_dir`:
   sentences (never trained on), feeds their first `k` bits and lets the model finish.
   Multinomial sampling at temperature τ, `PAD`/`BOS` masked out of the distribution.
   Every string is scored with `Language.is_valid` (the exact DP decoder). Reported:
+  * `decodable_pct` — the bit string can be segmented completely into words from the
+    global code, before checking vertex ownership or graph adjacency;
   * `validity_pct` — the produced string encodes at least one walk;
   * `terminated_pct` — the model emitted `EOS` itself instead of hitting `max_len`;
   * `valid_and_terminated_pct` — the model's **own EOS placement** yields a valid
