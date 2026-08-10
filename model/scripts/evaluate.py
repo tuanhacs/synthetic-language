@@ -33,6 +33,12 @@ def main() -> int:
     ap.add_argument("checkpoint")
     ap.add_argument("--dataset", default=None, help="dataset dir (default: the one in the config)")
     ap.add_argument("--n-samples", type=int, default=None)
+    ap.add_argument(
+        "--gen-batch-size",
+        type=int,
+        default=None,
+        help="number of sequences generated in parallel (default: checkpoint config)",
+    )
     ap.add_argument("--temperature", type=float, default=None)
     ap.add_argument("--cuts", type=int, nargs="+", default=None)
     ap.add_argument("--seed", type=int, default=None)
@@ -48,6 +54,7 @@ def main() -> int:
         k: v
         for k, v in {
             "n_samples": args.n_samples,
+            "gen_batch_size": args.gen_batch_size,
             "temperature": args.temperature,
             "cuts": None if args.cuts is None else tuple(args.cuts),
             "seed": args.seed,
