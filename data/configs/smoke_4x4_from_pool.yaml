@@ -10,7 +10,7 @@ language:
 
 data:
   walk_len: [4, 48]
-  pool_tokens: 80_000_000
+  pool_tokens: 100_000_000
   split: [80, 10, 10]
   seed: 42 # controls assignment, samples, noise and split
   noise: null
