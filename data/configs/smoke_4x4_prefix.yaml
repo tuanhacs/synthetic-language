@@ -13,6 +13,6 @@ data:
   walk_len: [4, 48] # vertices per walk, uniform in this range
   pool_tokens: 60_000_000 # total bits in the frozen pool
   split: [80, 10, 10] # train / valid / test, disjoint at string level
-  seed: 42
+  seed: 0
   noise: null # {type: bit-flip|bit-delete|vertex-noise, gamma, rho}
   context_len: 800 # training context (packing + length warnings)

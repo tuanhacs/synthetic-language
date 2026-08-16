@@ -15,7 +15,7 @@ train:
   warmup: 100
   log_every: 50
   eval_every: 250
-  seed: 42
+  seed: 0
   out_dir: outputs/smoke_micro
 
 eval:
