@@ -108,7 +108,10 @@ def build(
         log(
             f"[warn] pool slack is small: {len(pool_code)} words vs maximum required {max_needed}"
         )
-    codebooks = assign(cfg.language, graph, pool_code, rngs["assignment"])
+    try:
+        codebooks = assign(cfg.language, graph, pool_code, rngs["assignment"])
+    except ValueError as exc:
+        raise SystemExit(f"ABORT: codebook assignment failed: {exc}") from None
     counts = codebooks.k_per_vertex
     log(
         f"assigned codewords: total={sum(counts)} per-vertex={min(counts)}..{max(counts)}"

@@ -118,6 +118,29 @@ language:
 The assignment is deterministic for a fixed config and `data.seed`. The pool
 must contain at least `|V| * k_max` words so every possible draw is feasible.
 
+To create genuine vertex ambiguity while retaining a uniquely recoverable
+walk, use the draft's general support-set construction:
+
+```yaml
+language:
+  k: [1, 4]                      # exact target |B_v|, sampled per vertex
+  assignment: arbitrary-overlap
+  overlap:
+    support_size: [2, 4]         # a shared word belongs to 2..4 vertices
+    shared_codewords: 12         # exact target; failure aborts rather than lowering it
+    max_restarts: 100
+    candidate_trials: 10_000
+```
+
+The constructor starts with one private singleton support per vertex, greedily
+adds the requested shared supports, and fills unused vertex capacity with
+private words. Every candidate support `A_j` is accepted only when
+`|E_dir ∩ (A_j × A_k)| <= 1` in both orders for every existing support `A_k`.
+The final codebooks are independently checked by the directed-edge-pair
+certificate. `support_size`, `shared_codewords`, and `k` therefore control
+different quantities: ambiguity per word, number of ambiguous words, and
+lexical capacity per vertex respectively.
+
 To replace the generated `C^x` pool with an existing ordered JSON array of
 codewords, set `language.codeword_pool_file`:
 
@@ -357,7 +380,7 @@ Two caveats worth knowing:
 | `synthdata/codes/model.py` | `Code`: word set, `power(x)`, `sample_subset` |
 | `synthdata/codes/generate.py` | the *only* code-type branch: tree pruning, reversal, UD rejection sampling |
 | `synthdata/codes/certify.py` | `is_prefix_free`, `is_suffix_free`, `sardinas_patterson`, `CodeReport` |
-| `synthdata/codebooks.py` | assignment strategies (`disjoint-random`) + Theorem D.1 certification |
+| `synthdata/codebooks.py` | disjoint/arbitrary-overlap assignments + support/Theorem D.1 certification |
 | `synthdata/language.py` | sampler, general DP decoder, exact next-bit oracle, entropy floor, certifier |
 | `synthdata/noise.py` | `bit-flip`, `bit-delete`, `vertex-noise` transforms |
 | `synthdata/tokenizer.py` | bit-level tokenizer and context-window packing |

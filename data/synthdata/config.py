@@ -16,7 +16,7 @@ from typing import Any
 import yaml
 
 CODE_TYPES = ("prefix-free", "suffix-free", "ud")
-ASSIGNMENTS = ("disjoint-random",)
+ASSIGNMENTS = ("disjoint-random", "arbitrary-overlap")
 NOISE_TYPES = ("bit-flip", "bit-delete", "vertex-noise")
 
 _GRAPH_RE = re.compile(r"^grid[-_ ]?(\d+)\s*x\s*(\d+)$", re.IGNORECASE)
@@ -68,11 +68,30 @@ class CodeConfig:
 
 
 @dataclass(frozen=True)
+class OverlapConfig:
+    """Controls the greedy support-set construction for arbitrary overlap."""
+
+    support_size: tuple[int, int] = (2, 4)
+    shared_codewords: int = 12
+    max_restarts: int = 100
+    candidate_trials: int = 10_000
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "support_size": list(self.support_size),
+            "shared_codewords": self.shared_codewords,
+            "max_restarts": self.max_restarts,
+            "candidate_trials": self.candidate_trials,
+        }
+
+
+@dataclass(frozen=True)
 class LanguageConfig:
     graph: str = "grid-4x4"
     code: CodeConfig = field(default_factory=CodeConfig)
     k: int | tuple[int, int] = 4
     assignment: str = "disjoint-random"
+    overlap: OverlapConfig | None = None
     codeword_pool_file: str | None = None
 
     @property
@@ -104,6 +123,8 @@ class LanguageConfig:
         }
         if self.codeword_pool_file is not None:
             out["codeword_pool_file"] = self.codeword_pool_file
+        if self.overlap is not None:
+            out["overlap"] = self.overlap.to_dict()
         return out
 
 
@@ -189,6 +210,24 @@ def _k_spec(value: Any) -> int | tuple[int, int]:
         raise ConfigError("language.k must be an integer or [min, max] pair") from None
 
 
+def _overlap_config(raw: Any) -> OverlapConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError("language.overlap must be a mapping")
+    unknown = set(raw) - {
+        "support_size", "shared_codewords", "max_restarts", "candidate_trials"
+    }
+    if unknown:
+        raise ConfigError(f"unknown language.overlap fields: {sorted(unknown)}")
+    return OverlapConfig(
+        support_size=_pair(raw.get("support_size", [2, 4]), "language.overlap.support_size"),
+        shared_codewords=int(raw.get("shared_codewords", 12)),
+        max_restarts=int(raw.get("max_restarts", 100)),
+        candidate_trials=int(raw.get("candidate_trials", 10_000)),
+    )
+
+
 def _noise_config(raw: Any) -> NoiseConfig | None:
     if raw is None:
         return None
@@ -212,7 +251,9 @@ def parse_config(raw: dict[str, Any]) -> Config:
     lang_raw = dict(raw.get("language") or {})
     data_raw = dict(raw.get("data") or {})
 
-    unknown = set(lang_raw) - {"graph", "code", "k", "assignment", "codeword_pool_file"}
+    unknown = set(lang_raw) - {
+        "graph", "code", "k", "assignment", "overlap", "codeword_pool_file"
+    }
     if unknown:
         raise ConfigError(f"unknown language fields: {sorted(unknown)}")
     unknown = set(data_raw) - {"walk_len", "pool_tokens", "split", "seed", "noise", "context_len"}
@@ -230,6 +271,7 @@ def parse_config(raw: dict[str, Any]) -> Config:
         code=_code_config(dict(lang_raw.get("code") or {})),
         k=_k_spec(lang_raw.get("k", 4)),
         assignment=assignment,
+        overlap=_overlap_config(lang_raw.get("overlap")),
         codeword_pool_file=codeword_pool_file,
     )
 
@@ -268,8 +310,35 @@ def validate_config(cfg: Config) -> list[str]:
     k_lo, k_hi = cfg.language.k_range
     if k_lo < 1:
         raise ConfigError("language.k must be >= 1 (or [min, max] with min >= 1)")
-
     n_v = cfg.language.num_vertices  # also validates the graph spec
+    overlap = cfg.language.overlap
+    if cfg.language.assignment == "arbitrary-overlap":
+        if overlap is None:
+            raise ConfigError(
+                "language.overlap is required when assignment is 'arbitrary-overlap'"
+            )
+        support_lo, support_hi = overlap.support_size
+        if support_lo < 2:
+            raise ConfigError("language.overlap.support_size min must be >= 2")
+        if support_hi > n_v:
+            raise ConfigError(
+                f"language.overlap.support_size max {support_hi} exceeds |V|={n_v}"
+            )
+        if overlap.shared_codewords < 1:
+            raise ConfigError("language.overlap.shared_codewords must be >= 1")
+        if overlap.max_restarts < 1 or overlap.candidate_trials < 1:
+            raise ConfigError(
+                "language.overlap.max_restarts and candidate_trials must be >= 1"
+            )
+        if k_hi < 2:
+            raise ConfigError(
+                "arbitrary-overlap needs k_max >= 2 so vertices have room for shared words"
+            )
+    elif overlap is not None:
+        raise ConfigError(
+            "language.overlap is only valid when assignment is 'arbitrary-overlap'"
+        )
+
     external_pool = cfg.language.codeword_pool_file is not None
     if external_pool:
         if not cfg.language.codeword_pool_file:

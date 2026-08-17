@@ -52,6 +52,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"           code={cert['code']}")
     print(f"           codebooks: theorem_d1={cert['codebooks']['theorem_d1']} "
           f"pairwise_disjoint={cert['codebooks']['pairwise_disjoint']}")
+    print(
+        f"           overlap: shared_words={cert['codebooks'].get('shared_codewords', 0)} "
+        f"vertex_pairs={cert['codebooks'].get('overlap_pairs', 0)} "
+        f"max_intersection={cert['codebooks'].get('max_pairwise_overlap', 0)} "
+        f"support_max={cert['codebooks'].get('max_support_size', 1)}"
+    )
     floor = ds.manifest["stats"].get("entropy_floor_bits_per_token")
     if floor is not None:
         print(f"floor:     {floor:.4f} bits/token")

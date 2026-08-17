@@ -5,7 +5,13 @@ codeword from the current vertex's codebook and concatenated without separators.
 See ``../README.md`` and ``../../docs/context.md``.
 """
 
-from .codebooks import Codebooks, CodebookReport, assign, assign_disjoint_random
+from .codebooks import (
+    Codebooks,
+    CodebookReport,
+    assign,
+    assign_arbitrary_overlap,
+    assign_disjoint_random,
+)
 from .codes import Code, CodeReport, certify, load_codeword_pool, make_code
 from .config import (
     CodeConfig,
@@ -13,6 +19,7 @@ from .config import (
     ConfigError,
     DataConfig,
     LanguageConfig,
+    OverlapConfig,
     NoiseConfig,
     config_hash,
     load_config,
@@ -41,12 +48,14 @@ __all__ = [
     "GridGraph",
     "Language",
     "LanguageConfig",
+    "OverlapConfig",
     "LanguageReport",
     "NoiseConfig",
     "Sample",
     "Splits",
     "apply_noise",
     "assign",
+    "assign_arbitrary_overlap",
     "assign_disjoint_random",
     "build_pool",
     "certify",
