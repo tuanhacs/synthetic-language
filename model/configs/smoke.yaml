@@ -2,7 +2,7 @@
 # Paths are resolved relative to this file.
 model:
   size: micro # d_model 128, 4 layers, 4 heads (see SIZE_PRESETS)
-  context_len: 1200
+  context_len: 1600
 
 data:
   dataset_dir: ../data/outputs/smoke
