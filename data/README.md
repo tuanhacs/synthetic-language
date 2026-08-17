@@ -107,6 +107,17 @@ data:
   context_len: 512               # training context: used for packing and length warnings.
 ```
 
+`language.k` may also be an inclusive range. In that form, each vertex receives
+an independently sampled, uniformly random number of codewords:
+
+```yaml
+language:
+  k: [1, 4]                     # each |B_v| is sampled independently from {1,2,3,4}
+```
+
+The assignment is deterministic for a fixed config and `data.seed`. The pool
+must contain at least `|V| * k_max` words so every possible draw is feasible.
+
 To replace the generated `C^x` pool with an existing ordered JSON array of
 codewords, set `language.codeword_pool_file`:
 
@@ -130,15 +141,15 @@ data:
 The canonical JSON format is just `["001", "1010", ...]`;
 `{"codewords": [...]}` is also accepted. The loader preserves array order,
 rejects duplicates/non-binary words and checks that the pool contains at least
-`|V| * k` words. It then runs the normal assignment strategy and certifies the
-assigned `|V| * k` subset against `code.type`. Thus the file replaces only
+`|V| * k_max` words. It then runs the normal assignment strategy and certifies the
+assigned subset against `code.type`. Thus the file replaces only
 `base -> C^x`; graph
 construction, random assignment to vertices, language certification, walk
 sampling, noise, splitting and output storage are unchanged. Relative paths are
 resolved against the YAML file. `base_size`, length range and `power_x` do not
 apply when `codeword_pool_file` is present.
 
-Cross-constraints checked at load time (hard errors): `|C|^x ≥ |V| · k` (disjoint assignment must
+Cross-constraints checked at load time (hard errors): `|C|^x ≥ |V| · k_max` (disjoint assignment must
 be feasible), `base_size ≥ 2`, `power_x ≥ 1`, `walk_len` min `≥ 2`, valid graph spec, positive
 split. Soft **warnings** are printed for: little pool slack (`< 4 ×` the required number of
 codewords, i.e. no room for later overlap constructions) and a worst-case sentence length

@@ -5,7 +5,7 @@ language:
   codeword_pool_file: ../codeword_pools/hard_ud_codebook_200_v2.json
   code:
     type: ud # the words assigned from this pool are certified
-  k: 1
+  k: [1, 4] # each vertex gets a uniformly random number of codewords in this range
   assignment: disjoint-random # samples |V|*k words, then deals k to each vertex
 
 data:

@@ -97,17 +97,22 @@ def build(
             f"lengths {pool_code.min_len}..{pool_code.max_len} bits"
         )
 
-    needed = graph.num_vertices * cfg.language.k
-    if len(pool_code) < needed:
+    k_lo, k_hi = cfg.language.k_range
+    max_needed = graph.num_vertices * k_hi
+    if len(pool_code) < max_needed:
         raise SystemExit(
-            f"ABORT: codeword pool has {len(pool_code)} words, need {needed} "
-            f"for {graph.num_vertices} vertices x k={cfg.language.k}"
+            f"ABORT: codeword pool has {len(pool_code)} words, need up to {max_needed} "
+            f"for {graph.num_vertices} vertices x k_max={k_hi}"
         )
-    if source_pool_path is not None and len(pool_code) < 4 * needed:
+    if source_pool_path is not None and len(pool_code) < 4 * max_needed:
         log(
-            f"[warn] pool slack is small: {len(pool_code)} words vs required {needed}"
+            f"[warn] pool slack is small: {len(pool_code)} words vs maximum required {max_needed}"
         )
     codebooks = assign(cfg.language, graph, pool_code, rngs["assignment"])
+    counts = codebooks.k_per_vertex
+    log(
+        f"assigned codewords: total={sum(counts)} per-vertex={min(counts)}..{max(counts)}"
+    )
 
     language = Language(graph=graph, codebooks=codebooks, walk_len=cfg.data.walk_len)
 

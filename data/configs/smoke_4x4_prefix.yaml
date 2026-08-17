@@ -7,7 +7,7 @@ language:
     base_size: 3 # codewords of the base code C
     depth_range: [1, 4] # base codeword lengths (len_range for ud)
     power_x: 5 # codeword pool = C^6 (|C|^x = 729 >= |V|*k = 64)
-  k: 1 # codewords per vertex
+  k: [1, 4] # codewords per vertex
   assignment: disjoint-random # pairwise disjoint B_v
 data:
   walk_len: [4, 48] # vertices per walk, uniform in this range

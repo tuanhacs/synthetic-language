@@ -1,6 +1,6 @@
 """Codebook assignment: which codewords each vertex may speak.
 
-A codebook assignment maps every vertex ``v`` to ``B_v`` (a set of ``k``
+A codebook assignment maps every vertex ``v`` to ``B_v`` (a non-empty set of
 codewords drawn from the pool ``C^x``). v1 offers only ``disjoint-random``;
 overlap constructions (harmonious colouring, sparse pairing, greedy maximal)
 plug in as new strategies in :func:`assign` without touching anything else.
@@ -22,16 +22,27 @@ class CodebookReport:
     """Certification of the vertex-ambiguity condition (draft Theorem D.1)."""
 
     num_vertices: int
-    k: int
+    k_per_vertex: tuple[int, ...]
     pairwise_disjoint: bool
     adjacent_disjoint: bool
     theorem_d1: bool
     violations: tuple[str, ...] = ()
 
+    @property
+    def k_range(self) -> tuple[int, int]:
+        return min(self.k_per_vertex), max(self.k_per_vertex)
+
+    @property
+    def k(self) -> int | tuple[int, int]:
+        lo, hi = self.k_range
+        return lo if lo == hi else (lo, hi)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "num_vertices": self.num_vertices,
-            "k": self.k,
+            "k": self.k if isinstance(self.k, int) else list(self.k),
+            "k_per_vertex": list(self.k_per_vertex),
+            "total_assignments": sum(self.k_per_vertex),
             "pairwise_disjoint": self.pairwise_disjoint,
             "adjacent_disjoint": self.adjacent_disjoint,
             "theorem_d1": self.theorem_d1,
@@ -57,9 +68,19 @@ class Codebooks:
         return self.books[v]
 
     @property
-    def k(self) -> int:
-        """Codewords per vertex (uniform in v1)."""
-        return len(self.books[0])
+    def k_per_vertex(self) -> tuple[int, ...]:
+        return tuple(len(book) for book in self.books)
+
+    @property
+    def k_range(self) -> tuple[int, int]:
+        sizes = self.k_per_vertex
+        return min(sizes), max(sizes)
+
+    @property
+    def k(self) -> int | tuple[int, int]:
+        """Fixed ``k``, or the actual ``(min, max)`` for variable-size books."""
+        lo, hi = self.k_range
+        return lo if lo == hi else (lo, hi)
 
     def all_words(self) -> list[str]:
         return [w for book in self.books for w in book]
@@ -109,7 +130,7 @@ class Codebooks:
 
         return CodebookReport(
             num_vertices=len(self.books),
-            k=self.k,
+            k_per_vertex=self.k_per_vertex,
             pairwise_disjoint=pairwise_disjoint,
             adjacent_disjoint=adjacent_disjoint,
             theorem_d1=ok,
@@ -132,22 +153,34 @@ class Codebooks:
 
 
 def assign_disjoint_random(
-    graph: GridGraph, pool: Code, k: int, rng: random.Random
+    graph: GridGraph, pool: Code, k: int | tuple[int, int], rng: random.Random
 ) -> Codebooks:
-    """Sample ``|V| * k`` distinct codewords from the pool and deal ``k`` per vertex.
+    """Sample distinct words and deal a fixed or random count per vertex.
 
     The resulting codebooks are pairwise disjoint, which trivially satisfies the
-    Theorem D.1 condition (both intersections are empty for distinct edges).
+    Theorem D.1 condition. For ``k=(lo, hi)``, every vertex count is sampled
+    independently and uniformly from the inclusive range using ``rng``.
     """
-    need = graph.num_vertices * k
+    if isinstance(k, int):
+        counts = [k] * graph.num_vertices
+    else:
+        lo, hi = k
+        counts = [rng.randint(lo, hi) for _ in graph.vertices]
+    need = sum(counts)
     if need > len(pool):
-        raise ValueError(f"pool has {len(pool)} words, need {need} for |V|*k")
+        raise ValueError(f"pool has {len(pool)} words, assignment sampled {need}")
     chosen = pool.sample_subset(need, rng)
-    books = tuple(tuple(chosen.words[v * k : (v + 1) * k]) for v in range(graph.num_vertices))
-    return Codebooks(books)
+    books: list[tuple[str, ...]] = []
+    offset = 0
+    for count in counts:
+        books.append(tuple(chosen.words[offset : offset + count]))
+        offset += count
+    return Codebooks(tuple(books))
 
 
-_STRATEGIES: dict[str, Callable[[GridGraph, Code, int, random.Random], Codebooks]] = {
+_STRATEGIES: dict[
+    str, Callable[[GridGraph, Code, int | tuple[int, int], random.Random], Codebooks]
+] = {
     "disjoint-random": assign_disjoint_random,
 }
 

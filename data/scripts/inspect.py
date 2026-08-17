@@ -57,7 +57,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"floor:     {floor:.4f} bits/token")
 
     pool_code = lang.codebooks.global_code()
-    print(f"\ncodewords: {len(pool_code)} used ({cfg.language.num_vertices} vertices x {lang.codebooks.k})"
+    counts = lang.codebooks.k_per_vertex
+    print(f"\ncodewords: {len(pool_code)} used ({cfg.language.num_vertices} vertices; "
+          f"per-vertex {min(counts)}..{max(counts)}, total assignments {sum(counts)})"
           f"  lengths {pool_code.min_len}..{pool_code.max_len}")
     print("  codeword length histogram (used codewords):")
     for line in histogram_line(Counter({length: n for length, n in pool_code.length_histogram().items()})):

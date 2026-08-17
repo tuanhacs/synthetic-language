@@ -71,9 +71,14 @@ class CodeConfig:
 class LanguageConfig:
     graph: str = "grid-4x4"
     code: CodeConfig = field(default_factory=CodeConfig)
-    k: int = 4
+    k: int | tuple[int, int] = 4
     assignment: str = "disjoint-random"
     codeword_pool_file: str | None = None
+
+    @property
+    def k_range(self) -> tuple[int, int]:
+        """Inclusive number of codewords assigned to each vertex."""
+        return (self.k, self.k) if isinstance(self.k, int) else self.k
 
     @property
     def grid_n(self) -> int:
@@ -94,7 +99,7 @@ class LanguageConfig:
         out = {
             "graph": self.graph,
             "code": self.code.to_dict(),
-            "k": self.k,
+            "k": self.k if isinstance(self.k, int) else list(self.k),
             "assignment": self.assignment,
         }
         if self.codeword_pool_file is not None:
@@ -172,6 +177,18 @@ def _code_config(raw: dict[str, Any]) -> CodeConfig:
     )
 
 
+def _k_spec(value: Any) -> int | tuple[int, int]:
+    """Parse fixed ``k`` or an inclusive per-vertex ``[min, max]`` range."""
+    if isinstance(value, bool):
+        raise ConfigError("language.k must be an integer or [min, max] pair")
+    if isinstance(value, (list, tuple)):
+        return _pair(value, "language.k")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ConfigError("language.k must be an integer or [min, max] pair") from None
+
+
 def _noise_config(raw: Any) -> NoiseConfig | None:
     if raw is None:
         return None
@@ -211,7 +228,7 @@ def parse_config(raw: dict[str, Any]) -> Config:
     language = LanguageConfig(
         graph=str(lang_raw.get("graph", "grid-4x4")),
         code=_code_config(dict(lang_raw.get("code") or {})),
-        k=int(lang_raw.get("k", 4)),
+        k=_k_spec(lang_raw.get("k", 4)),
         assignment=assignment,
         codeword_pool_file=codeword_pool_file,
     )
@@ -240,16 +257,17 @@ def validate_config(cfg: Config) -> list[str]:
 
     Hard errors (raise :class:`ConfigError`):
       * malformed graph spec / non-square grid
-      * ``base_size < 2``, ``power_x < 1``, ``k < 1``
-      * pool size ``|C|^x >= |V| * k`` (disjoint assignment must be feasible)
+      * ``base_size < 2``, ``power_x < 1``, or either ``k`` bound below 1
+      * pool size sufficient for the maximum possible per-vertex assignment
       * degenerate walk length (``min < 2``) or split
 
     Soft warnings (returned, printed by the CLI):
       * worst-case sentence length exceeding ``data.context_len``
       * pool slack below 4x the required number of codewords
     """
-    if cfg.language.k < 1:
-        raise ConfigError("language.k must be >= 1")
+    k_lo, k_hi = cfg.language.k_range
+    if k_lo < 1:
+        raise ConfigError("language.k must be >= 1 (or [min, max] with min >= 1)")
 
     n_v = cfg.language.num_vertices  # also validates the graph spec
     external_pool = cfg.language.codeword_pool_file is not None
@@ -266,11 +284,11 @@ def validate_config(cfg: Config) -> list[str]:
         if code.power_x < 1:
             raise ConfigError("code.power_x must be >= 1")
         pool_size = code.base_size**code.power_x
-        needed = n_v * cfg.language.k
+        needed = n_v * k_hi
         if pool_size < needed:
             raise ConfigError(
                 f"codeword pool too small: |C|^x = {code.base_size}^{code.power_x} = {pool_size} "
-                f"< |V| * k = {n_v} * {cfg.language.k} = {needed}"
+                f"< |V| * k_max = {n_v} * {k_hi} = {needed}"
             )
 
     wlo, whi = cfg.data.walk_len
