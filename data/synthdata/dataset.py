@@ -62,6 +62,8 @@ def build_pool(
                 "the language may be too small for this pool size"
             )
         sample = language.sample(None, rng)
+        if data_cfg.reverse_walks:
+            sample = sample.reverse_walk()
         if sample.bits in seen:
             continue
         seen.add(sample.bits)
@@ -123,7 +125,8 @@ def stream(language: Language, data_cfg: DataConfig, seed: int | None = None) ->
     """Infinite iterator of fresh samples (streaming mode, nothing stored)."""
     rng = random.Random(data_cfg.seed if seed is None else seed)
     while True:
-        yield language.sample(None, rng)
+        sample = language.sample(None, rng)
+        yield sample.reverse_walk() if data_cfg.reverse_walks else sample
 
 
 def pool_stats(pool: Sequence[Sample]) -> dict[str, Any]:

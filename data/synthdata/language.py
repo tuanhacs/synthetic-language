@@ -42,6 +42,26 @@ class Sample:
             start = end
         return out
 
+    def reverse_walk(self) -> "Sample":
+        """Reverse walk/codeword order without reversing any codeword's bits.
+
+        This is intended as a paired-data transform before noise is applied:
+        ``b1|...|bm`` becomes ``bm|...|b1`` and the walk is reversed with it.
+        """
+        if self.noised_bits is not None:
+            raise ValueError("reverse_walk must be applied before noise")
+        parts = list(reversed(self.codewords))
+        cuts: list[int] = []
+        total = 0
+        for word in parts:
+            total += len(word)
+            cuts.append(total)
+        return Sample(
+            bits="".join(parts),
+            walk=tuple(reversed(self.walk)),
+            cuts=tuple(cuts),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "bits": self.bits,

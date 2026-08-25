@@ -103,9 +103,16 @@ data:
   pool_tokens: 2_000_000         # total bits in the frozen pool (dataset size D).
   split: [98, 1, 1]              # train/valid/test ratios, disjoint at string level.
   seed: 42                       # the only source of randomness.
+  reverse_walks: false           # true: b1|...|bm -> bm|...|b1; bits inside bi unchanged.
   noise: null                    # {type, gamma, rho}; see section 6.
   context_len: 512               # training context: used for packing and length warnings.
 ```
+
+For a paired directionality control, copy a config without changing its language
+or seed and set `data.reverse_walks: true`. The generator first samples the same
+walk and the same codeword at every step as the normal run, then reverses the
+walk and codeword order. Individual codewords are not bit-reversed. Thus
+`b1|b2|...|bm` becomes `bm|...|b2|b1`, with `cuts` recomputed accordingly.
 
 `language.k` may also be an inclusive range. In that form, each vertex receives
 an independently sampled, uniformly random number of codewords:

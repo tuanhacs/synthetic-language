@@ -1,0 +1,20 @@
+# Paired control for smoke_4x4_from_pool.yaml.
+# Same graph, codebooks, RNG streams and chosen codewords; only the order of
+# walk steps/codewords in every sentence is reversed. Bits inside a codeword
+# are left unchanged.
+language:
+  graph: grid-6x6
+  codeword_pool_file: ../codeword_pools/hard_ud_codebook_200.json
+  code:
+    type: ud
+  k: [1, 4]
+  assignment: disjoint-random
+
+data:
+  walk_len: [4, 48]
+  pool_tokens: 120_000_000
+  split: [80, 10, 10]
+  seed: 0
+  reverse_walks: true
+  noise: null
+  context_len: 1600

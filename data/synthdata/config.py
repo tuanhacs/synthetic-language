@@ -144,6 +144,7 @@ class DataConfig:
     pool_tokens: int = 10_000_000
     split: tuple[float, float, float] = (98.0, 1.0, 1.0)
     seed: int = 42
+    reverse_walks: bool = False
     noise: NoiseConfig | None = None
     context_len: int = 512  # training context; used for packing + length warnings
 
@@ -153,6 +154,7 @@ class DataConfig:
             "pool_tokens": self.pool_tokens,
             "split": list(self.split),
             "seed": self.seed,
+            "reverse_walks": self.reverse_walks,
             "noise": self.noise.to_dict() if self.noise else None,
             "context_len": self.context_len,
         }
@@ -256,7 +258,9 @@ def parse_config(raw: dict[str, Any]) -> Config:
     }
     if unknown:
         raise ConfigError(f"unknown language fields: {sorted(unknown)}")
-    unknown = set(data_raw) - {"walk_len", "pool_tokens", "split", "seed", "noise", "context_len"}
+    unknown = set(data_raw) - {
+        "walk_len", "pool_tokens", "split", "seed", "reverse_walks", "noise", "context_len"
+    }
     if unknown:
         raise ConfigError(f"unknown data fields: {sorted(unknown)}")
 
@@ -280,11 +284,16 @@ def parse_config(raw: dict[str, Any]) -> Config:
         raise ConfigError("data.split must be a 3-element list [train, valid, test]")
     split_t = tuple(float(s) for s in split)
 
+    reverse_walks = data_raw.get("reverse_walks", False)
+    if not isinstance(reverse_walks, bool):
+        raise ConfigError("data.reverse_walks must be true or false")
+
     data = DataConfig(
         walk_len=_pair(data_raw.get("walk_len", [8, 32]), "data.walk_len"),
         pool_tokens=int(data_raw.get("pool_tokens", 10_000_000)),
         split=split_t,  # type: ignore[arg-type]
         seed=int(data_raw.get("seed", 42)),
+        reverse_walks=reverse_walks,
         noise=_noise_config(data_raw.get("noise")),
         context_len=int(data_raw.get("context_len", 512)),
     )
