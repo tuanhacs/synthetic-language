@@ -2,7 +2,7 @@
 # The file is a JSON array such as ["001", "101", ...].
 language:
   graph: grid-6x6
-  codeword_pool_file: ../codeword_pools/hard_ud_codebook_200_v2.json
+  codeword_pool_file: ../codeword_pools/hard_ud_codebook_200.json
   code:
     type: ud # the words assigned from this pool are certified
   k: [1, 4] # independently sampled target |B_v| for each vertex
