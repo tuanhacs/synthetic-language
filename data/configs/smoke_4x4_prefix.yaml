@@ -7,16 +7,16 @@ language:
     base_size: 3 # codewords of the base code C
     depth_range: [1, 4] # base codeword lengths (len_range for ud)
     power_x: 5 # codeword pool = C^6 (|C|^x = 729 >= |V|*k = 64)
-  k: 4 # codewords per vertex
-  assignment: disjoint-random # disjoint | arbitrary-overlap
-  # overlap:
-  #   support_size: [2, 4] # each shared codeword belongs to 2..4 vertices
-  #   shared_codewords: 12
-  #   max_restarts: 100
-  #   candidate_trials: 10_000
+  k: [1, 4] # codewords per vertex
+  assignment: arbitrary-overlap # disjoint | arbitrary-overlap
+  overlap:
+    support_size: [2, 4] # each shared codeword belongs to 2..4 vertices
+    shared_codewords: 12
+    max_restarts: 100
+    candidate_trials: 10_000
 data:
   walk_len: [4, 48] # vertices per walk, uniform in this range
-  pool_tokens: 20_000_000 # total bits in the frozen pool
+  pool_tokens: 80_000_000 # total bits in the frozen pool
   split: [80, 10, 10] # train / valid / test, disjoint at string level
   seed: 0
   noise: null # {type: bit-flip|bit-delete|vertex-noise, gamma, rho}
