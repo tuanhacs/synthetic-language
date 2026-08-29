@@ -4,15 +4,20 @@
 # are left unchanged.
 language:
   graph: grid-6x6
-  codeword_pool_file: ../codeword_pools/hard_ud_codebook_200_v2.json
+  codeword_pool_file: ../codeword_pools/hard_ud_codebook_200.json
   code:
     type: ud
   k: [1, 4]
-  assignment: disjoint-random
+  assignment: arbitrary-overlap # disjoint | arbitrary-overlap
+  overlap:
+    support_size: [2, 4] # each shared codeword belongs to 2..4 vertices
+    shared_codewords: 12
+    max_restarts: 100
+    candidate_trials: 10_000
 
 data:
   walk_len: [4, 48]
-  pool_tokens: 120_000_000
+  pool_tokens: 140_000_000
   split: [80, 10, 10]
   seed: 0
   reverse_walks: true
