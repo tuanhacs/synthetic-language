@@ -17,7 +17,7 @@ language:
 
 data:
   walk_len: [4, 48]
-  pool_tokens: 140_000_000
+  pool_tokens: 100_000_000
   split: [80, 10, 10]
   seed: 0
   reverse_walks: true
