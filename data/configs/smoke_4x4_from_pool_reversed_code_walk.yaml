@@ -15,7 +15,7 @@ language:
 
 data:
   walk_len: [4, 48]
-  pool_tokens: 140_000_000
+  pool_tokens: 120_000_000
   split: [80, 10, 10]
   reverse_walks: true
   seed: 0 # controls assignment, samples, noise and split
