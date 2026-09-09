@@ -40,6 +40,7 @@ def main() -> int:
         help="number of sequences generated in parallel (default: checkpoint config)",
     )
     ap.add_argument("--temperature", type=float, default=None)
+    ap.add_argument("--max-len", type=int, default=None)
     ap.add_argument("--cuts", type=int, nargs="+", default=None)
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--out-dir", default=None)
@@ -56,6 +57,7 @@ def main() -> int:
             "n_samples": args.n_samples,
             "gen_batch_size": args.gen_batch_size,
             "temperature": args.temperature,
+            "max_len": args.max_len,
             "cuts": None if args.cuts is None else tuple(args.cuts),
             "seed": args.seed,
         }.items()

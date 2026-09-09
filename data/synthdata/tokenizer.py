@@ -1,4 +1,4 @@
-"""Bit-level tokenizer: vocabulary {0, 1, BOS, EOS, PAD}.
+"""Bit-level tokenizer, optionally extended with the path-QA separator ``_``.
 
 Tokenisation is deliberately bit-level. Codeword-level tokens would hand the
 segmentation to the model for free, which is exactly the difficulty we study.
@@ -14,8 +14,14 @@ from .language import Sample
 class BitTokenizer:
     """Maps bit strings to token ids and packs sentences into context windows."""
 
-    BIT0, BIT1, BOS, EOS, PAD = 0, 1, 2, 3, 4
-    ID_TO_TOKEN = {0: "0", 1: "1", 2: "<bos>", 3: "<eos>", 4: "<pad>"}
+    BIT0, BIT1, BOS, EOS, PAD, SEP = 0, 1, 2, 3, 4, 5
+    BASE_ID_TO_TOKEN = {0: "0", 1: "1", 2: "<bos>", 3: "<eos>", 4: "<pad>"}
+
+    def __init__(self, include_separator: bool = False) -> None:
+        self.include_separator = include_separator
+        self.ID_TO_TOKEN = dict(self.BASE_ID_TO_TOKEN)
+        if include_separator:
+            self.ID_TO_TOKEN[self.SEP] = "_"
 
     @property
     def vocab_size(self) -> int:
@@ -23,7 +29,7 @@ class BitTokenizer:
 
     @property
     def vocab(self) -> dict[str, int]:
-        return {"0": self.BIT0, "1": self.BIT1, "<bos>": self.BOS, "<eos>": self.EOS, "<pad>": self.PAD}
+        return {token: index for index, token in self.ID_TO_TOKEN.items()}
 
     def encode(self, bits: str, bos: bool = True, eos: bool = True) -> list[int]:
         """``bits`` -> token ids, optionally wrapped in BOS/EOS."""
@@ -33,8 +39,10 @@ class BitTokenizer:
                 ids.append(self.BIT0)
             elif ch == "1":
                 ids.append(self.BIT1)
+            elif ch == "_" and self.include_separator:
+                ids.append(self.SEP)
             else:
-                raise ValueError(f"not a bit: {ch!r}")
+                raise ValueError(f"not a bit or enabled separator: {ch!r}")
         if eos:
             ids.append(self.EOS)
         return ids
@@ -50,7 +58,7 @@ class BitTokenizer:
 
     def pack(
         self,
-        samples: Iterable[Sample | str],
+        samples: Iterable[Sample | str | object],
         context_len: int,
         drop_last: bool = True,
     ) -> Iterator[list[int]]:
@@ -65,7 +73,19 @@ class BitTokenizer:
         buffer: list[int] = []
         for item in samples:
             bits = item if isinstance(item, str) else item.bits
-            buffer.extend(self.encode(bits))
+            ids = self.encode(bits)
+            if hasattr(item, "query_bits"):
+                # Encode answer-only supervision in-band. Model-side batching
+                # strips this offset from inputs and masks marked targets. This
+                # preserves the mask even when packed windows start mid-sample.
+                if not self.include_separator:
+                    raise ValueError("QA samples require a separator-enabled tokenizer")
+                sep = ids.index(self.SEP)
+                ids = [
+                    token + self.vocab_size if i <= sep else token
+                    for i, token in enumerate(ids)
+                ]
+            buffer.extend(ids)
             while len(buffer) >= context_len:
                 yield buffer[:context_len]
                 del buffer[:context_len]

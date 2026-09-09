@@ -78,6 +78,11 @@ def train(cfg: Config, verbose: bool = True) -> dict:
     metrics_path.write_text("", encoding="utf-8")
 
     data: PackedData = load_frozen(cfg.resolved_dataset_dir(), cfg.model.context_len)
+    task_type = data.manifest.get("config", {}).get("task", {}).get(
+        "type", "language-modeling"
+    )
+    if cfg.data.mode == "streaming" and task_type == "path-qa":
+        raise ValueError("path-QA currently requires data.mode: frozen")
     floor = data.entropy_floor
     model = build_model(cfg.model, data.tokenizer).to(device)
     optimizer = make_optimizer(model, cfg.train)
@@ -96,12 +101,19 @@ def train(cfg: Config, verbose: bool = True) -> dict:
         next_train_batch = lambda: next(train_iter)  # noqa: E731
         n_train_windows = None
     else:
-        sampler = BatchSampler(data.train, cfg.train.batch_size, seed=cfg.train.seed)
+        sampler = BatchSampler(
+            data.train, cfg.train.batch_size, seed=cfg.train.seed, tokenizer=data.tokenizer
+        )
         next_train_batch = lambda: sampler.batch(device)  # noqa: E731
         n_train_windows = len(sampler)
 
     valid_sampler = (
-        BatchSampler(data.valid, cfg.train.batch_size, seed=cfg.train.seed + 1)
+        BatchSampler(
+            data.valid,
+            cfg.train.batch_size,
+            seed=cfg.train.seed + 1,
+            tokenizer=data.tokenizer,
+        )
         if data.valid.numel()
         else None
     )

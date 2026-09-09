@@ -9,7 +9,8 @@ Two modes, mirroring the data side:
   iterator, for later infinite-data scaling runs.
 
 Windows are ``context_len + 1`` tokens long, so a batch yields inputs ``w[:, :-1]``
-and targets ``w[:, 1:]`` of exactly ``context_len`` positions.
+and targets ``w[:, 1:]`` of exactly ``context_len`` positions. For path-QA,
+query and separator targets are masked and loss is computed only on answer/EOS.
 
 **Loss masking.** Targets equal to PAD (never present with ``drop_last``) or BOS are
 excluded from the loss. Sentences are concatenated as in the CFG paper, so no masking
@@ -41,7 +42,7 @@ IGNORE_INDEX = -100
 
 
 def pack_windows(
-    samples: Sequence[Sample | str], context_len: int, tokenizer: BitTokenizer | None = None
+    samples: Sequence, context_len: int, tokenizer: BitTokenizer | None = None
 ) -> torch.Tensor:
     """Pack sentences into a ``(n_windows, context_len + 1)`` int64 tensor."""
     tok = tokenizer or BitTokenizer()
@@ -54,12 +55,19 @@ def pack_windows(
     return torch.tensor(windows, dtype=torch.long)
 
 
-def make_targets(windows: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def make_targets(
+    windows: torch.Tensor, tokenizer: BitTokenizer | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
     """``(inputs, targets)`` from packed windows, with ignored targets masked out."""
-    inputs, targets = windows[:, :-1], windows[:, 1:].clone()
+    tok = tokenizer or BitTokenizer()
+    raw_inputs, raw_targets = windows[:, :-1], windows[:, 1:].clone()
+    marked = raw_targets >= tok.vocab_size
+    inputs = raw_inputs.remainder(tok.vocab_size)
+    targets = raw_targets.remainder(tok.vocab_size)
     mask = torch.zeros_like(targets, dtype=torch.bool)
     for token in IGNORE_TARGETS:
         mask |= targets == token
+    mask |= marked
     targets[mask] = IGNORE_INDEX
     return inputs, targets
 
@@ -74,9 +82,9 @@ class PackedData:
     train: torch.Tensor
     valid: torch.Tensor
     test: torch.Tensor
-    train_samples: tuple[Sample, ...]
-    valid_samples: tuple[Sample, ...]
-    test_samples: tuple[Sample, ...]
+    train_samples: tuple
+    valid_samples: tuple
+    test_samples: tuple
     manifest: dict
     context_len: int
 
@@ -89,7 +97,7 @@ class PackedData:
     def split(self, name: str) -> torch.Tensor:
         return {"train": self.train, "valid": self.valid, "test": self.test}[name]
 
-    def samples(self, name: str) -> tuple[Sample, ...]:
+    def samples(self, name: str) -> tuple:
         return {
             "train": self.train_samples,
             "valid": self.valid_samples,
@@ -107,7 +115,8 @@ def load_frozen(dataset_dir: str | Path, context_len: int) -> PackedData:
     """Load a synthdata dataset directory and pack all three splits."""
     path = Path(dataset_dir)
     ds = load_dataset(path)
-    tok = BitTokenizer()
+    qa = ds.config.task.type == "path-qa"
+    tok = BitTokenizer(include_separator=qa)
 
     def pack_or_empty(samples: tuple[Sample, ...]) -> torch.Tensor:
         try:
@@ -133,12 +142,19 @@ def load_frozen(dataset_dir: str | Path, context_len: int) -> PackedData:
 class BatchSampler:
     """Random-batch sampler over packed windows, with its own seeded generator."""
 
-    def __init__(self, windows: torch.Tensor, batch_size: int, seed: int = 0) -> None:
+    def __init__(
+        self,
+        windows: torch.Tensor,
+        batch_size: int,
+        seed: int = 0,
+        tokenizer: BitTokenizer | None = None,
+    ) -> None:
         if windows.numel() == 0:
             raise ValueError("no windows to sample from")
         self.windows = windows
         self.batch_size = batch_size
         self.generator = torch.Generator().manual_seed(seed)
+        self.tokenizer = tokenizer or BitTokenizer()
 
     def __len__(self) -> int:
         return self.windows.shape[0]
@@ -147,7 +163,7 @@ class BatchSampler:
         idx = torch.randint(
             0, self.windows.shape[0], (self.batch_size,), generator=self.generator
         )
-        inputs, targets = make_targets(self.windows[idx])
+        inputs, targets = make_targets(self.windows[idx], self.tokenizer)
         return inputs.to(device), targets.to(device)
 
     def sequential_batches(
@@ -156,7 +172,9 @@ class BatchSampler:
         """Deterministic pass over the first ``n_batches`` batches (for validation)."""
         total = self.windows.shape[0]
         for start in range(0, min(n_batches * self.batch_size, total), self.batch_size):
-            inputs, targets = make_targets(self.windows[start : start + self.batch_size])
+            inputs, targets = make_targets(
+                self.windows[start : start + self.batch_size], self.tokenizer
+            )
             yield inputs.to(device), targets.to(device)
 
 
@@ -179,12 +197,12 @@ def stream_batches(
     packer = tok.pack(samples, context_len=context_len + 1, drop_last=True)
     while True:
         windows = [next(packer) for _ in range(batch_size)]
-        inputs, targets = make_targets(torch.tensor(windows, dtype=torch.long))
+        inputs, targets = make_targets(torch.tensor(windows, dtype=torch.long), tok)
         yield inputs.to(device), targets.to(device)
 
 
 def sentence_batches(
-    samples: Sequence[Sample | str],
+    samples: Sequence,
     batch_size: int,
     tokenizer: BitTokenizer | None = None,
 ) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
@@ -195,15 +213,21 @@ def sentence_batches(
     entropy floor is defined over.
     """
     tok = tokenizer or BitTokenizer()
-    items = [item if isinstance(item, str) else item.bits for item in samples]
-    for start in range(0, len(items), batch_size):
-        chunk = items[start : start + batch_size]
-        ids = [tok.encode(bits) for bits in chunk]
+    for start in range(0, len(samples), batch_size):
+        chunk = samples[start : start + batch_size]
+        ids = []
+        for item in chunk:
+            bits = item if isinstance(item, str) else item.bits
+            seq = tok.encode(bits)
+            if hasattr(item, "query_bits"):
+                sep = seq.index(tok.SEP)
+                seq = [token + tok.vocab_size if i <= sep else token for i, token in enumerate(seq)]
+            ids.append(seq)
         width = max(len(seq) for seq in ids)
         padded = torch.full((len(ids), width), tok.PAD, dtype=torch.long)
         for row, seq in enumerate(ids):
             padded[row, : len(seq)] = torch.tensor(seq, dtype=torch.long)
-        yield make_targets(padded)
+        yield make_targets(padded, tok)
 
 
 def resolve_device(requested: str | None = None) -> torch.device:

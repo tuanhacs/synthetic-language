@@ -21,6 +21,12 @@ sys.path[:] = [p for p in sys.path if p not in ("", _HERE)]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from synthdata.storage import load_dataset  # noqa: E402
+from synthdata.qa import (  # noqa: E402
+    QASample,
+    qa_pool_stats,
+    query_contains_held_out,
+    validate_qa_answer,
+)
 
 
 def histogram_line(counter: Counter[int], width: int = 40) -> list[str]:
@@ -70,6 +76,50 @@ def main(argv: list[str] | None = None) -> int:
     print("  codeword length histogram (used codewords):")
     for line in histogram_line(Counter({length: n for length, n in pool_code.length_histogram().items()})):
         print(line)
+
+    if cfg.task.type == "path-qa":
+        print("\nQA splits:")
+        all_bits: dict[str, set[str]] = {}
+        for name, split in splits.items():
+            all_bits[name] = {s.bits for s in split}
+            stats = qa_pool_stats(split)
+            held = sum(query_contains_held_out(s.query_vertices, cfg.task) for s in split)
+            print(
+                f"  {name:5s} {stats['num_sentences']:7d} examples  "
+                f"{stats['total_bits']:9d} chars  held-out queries={held}"
+            )
+            if split:
+                print(
+                    f"        query bits={stats['query_bits']} waypoints={stats['query_waypoints']}\n"
+                    f"        answer bits={stats['answer_bits']} vertices={stats['answer_vertices']}"
+                )
+
+        print("\nsplit disjointness (complete encoded example):")
+        names = list(all_bits)
+        ok = True
+        for i, a in enumerate(names):
+            for b in names[i + 1 :]:
+                shared = all_bits[a] & all_bits[b]
+                ok = ok and not shared
+                print(f"  {a} n {b}: {len(shared)} shared")
+        print(f"  => {'OK' if ok else 'FAILED'}")
+
+        if args.validate:
+            print(f"\nvalidating {args.validate} reference test answers:")
+            counters = Counter()
+            for sample in splits.test[: args.validate]:
+                assert isinstance(sample, QASample)
+                result = validate_qa_answer(lang, sample.answer_bits, sample.query_vertices)
+                for key in (
+                    "decodable", "valid_walk", "correct_start", "correct_end",
+                    "waypoints_in_order", "piecewise_simple", "semantic_success",
+                ):
+                    counters[key] += int(result[key])
+            checked = min(args.validate, len(splits.test))
+            for key, value in counters.items():
+                pct = 100.0 * value / checked if checked else 0.0
+                print(f"    {key:20s} {value}/{checked} ({pct:.2f}%)")
+        return 0
 
     print("\nsplits:")
     all_bits: dict[str, set[str]] = {}

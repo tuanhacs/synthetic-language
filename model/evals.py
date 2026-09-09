@@ -28,6 +28,7 @@ import torch.nn.functional as F
 
 import _paths  # noqa: F401  (sys.path shim for synthdata; must precede synthdata imports)
 from synthdata.language import Language, Sample
+from synthdata.qa import QASample, validate_qa_answer
 
 from config import EvalConfig
 from data import IGNORE_INDEX, PackedData, sentence_batches
@@ -217,6 +218,104 @@ def eval_diversity(generated_bits: Sequence[str], train_bits: Iterable[str] = ()
 
 
 # --------------------------------------------------------------------------- #
+# path QA
+# --------------------------------------------------------------------------- #
+
+
+def eval_path_qa(
+    model: Model,
+    language: Language,
+    tokenizer,
+    test_samples: Sequence[QASample],
+    n_samples: int = 200,
+    temperature: float = 1.0,
+    max_len: int | None = None,
+    device: torch.device | str = "cpu",
+    rng: torch.Generator | None = None,
+    batch_size: int = 64,
+) -> dict:
+    """Prompt with ``query_bits + '_'`` and score any semantically valid route."""
+    if not test_samples:
+        raise ValueError("path-QA evaluation needs a non-empty test split")
+    selected = [test_samples[i % len(test_samples)] for i in range(n_samples)]
+    prefixes = [sample.query_bits + "_" for sample in selected]
+    generated = generate(
+        model,
+        tokenizer,
+        n=n_samples,
+        temperature=temperature,
+        max_len=max_len,
+        prefix_bits=prefixes,
+        device=device,
+        rng=rng,
+        batch_size=batch_size,
+        forbid_separator=True,
+    )
+    limit = max_len or model.cfg.context_len
+    counts = {
+        "answer_decodable": 0,
+        "valid_walk": 0,
+        "correct_start": 0,
+        "correct_end": 0,
+        "waypoints_in_order": 0,
+        "piecewise_simple": 0,
+        "semantic_success": 0,
+        "full_success": 0,
+        "exact_reference_bits": 0,
+        "exact_reference_walk": 0,
+        "terminated": 0,
+    }
+    answers: list[str] = []
+    examples: list[dict] = []
+    answer_vertices = 0
+    decoded_answers = 0
+    for sample, prefix, full in zip(selected, prefixes, generated):
+        if not full.startswith(prefix):
+            raise RuntimeError("generator did not preserve the QA prompt")
+        answer = full[len(prefix) :]
+        answers.append(answer)
+        terminated = len(full) < limit - 1  # BOS is not present in returned text
+        result = validate_qa_answer(language, answer, sample.query_vertices)
+        counts["answer_decodable"] += result["decodable"]
+        for key in (
+            "valid_walk", "correct_start", "correct_end", "waypoints_in_order",
+            "piecewise_simple", "semantic_success",
+        ):
+            counts[key] += result[key]
+        counts["terminated"] += terminated
+        counts["full_success"] += result["semantic_success"] and terminated
+        counts["exact_reference_bits"] += answer == sample.answer_bits
+        counts["exact_reference_walk"] += result["walk"] == sample.answer_walk
+        if result["walk"]:
+            decoded_answers += 1
+            answer_vertices += len(result["walk"])
+        if len(examples) < 10:
+            examples.append(
+                {
+                    "query_vertices": list(sample.query_vertices),
+                    "query_bits": sample.query_bits,
+                    "reference_walk": list(sample.answer_walk),
+                    "generated_answer_bits": answer,
+                    "decoded_walk": list(result["walk"]),
+                    "terminated": terminated,
+                    "semantic_success": result["semantic_success"],
+                }
+            )
+    total = len(selected)
+    report = {
+        "temperature": temperature,
+        "n_samples": total,
+        **{f"{key}_pct": 100.0 * value / total for key, value in counts.items()},
+        "mean_generated_answer_bits": sum(map(len, answers)) / total,
+        "mean_decoded_answer_vertices": (
+            answer_vertices / decoded_answers if decoded_answers else None
+        ),
+        "examples": examples,
+    }
+    return report
+
+
+# --------------------------------------------------------------------------- #
 # driver
 # --------------------------------------------------------------------------- #
 
@@ -236,6 +335,9 @@ def run_all(
         "dataset_dir": str(data.dataset_dir),
         "config_hash": data.manifest.get("config_hash"),
         "regime": data.manifest.get("certification", {}).get("regime"),
+        "task": data.manifest.get("config", {}).get(
+            "task", {"type": "language-modeling"}
+        ),
         "model": model.cfg.to_dict(),
         "num_params": model.num_params(),
         "eval": eval_cfg.to_dict(),
@@ -244,6 +346,31 @@ def run_all(
     }
     if extra:
         report.update(extra)
+
+    task_type = data.manifest.get("config", {}).get("task", {}).get(
+        "type", "language-modeling"
+    )
+    if task_type == "path-qa":
+        report["generation"]["path_qa"] = eval_path_qa(
+            model,
+            data.language,
+            data.tokenizer,
+            data.test_samples,
+            n_samples=eval_cfg.n_samples,
+            temperature=eval_cfg.temperature,
+            max_len=eval_cfg.max_len,
+            device=device,
+            rng=rng,
+            batch_size=eval_cfg.gen_batch_size,
+        )
+        if out_dir is not None:
+            path = Path(out_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "eval_report.json").write_text(
+                json.dumps(report, indent=2) + "\n", encoding="utf-8"
+            )
+            report["report_path"] = str(path / "eval_report.json")
+        return report
 
     train_bits = [s.bits for s in data.train_samples]
     for cut in eval_cfg.cuts:
@@ -290,6 +417,22 @@ def format_report(report: dict) -> str:
             f"   ({res['num_sentences']} sentences)"
         )
     for key, res in report["generation"].items():
+        if key == "path_qa":
+            lines.append(
+                f"  path-QA tau={res['temperature']} n={res['n_samples']}  "
+                f"decodable {res['answer_decodable_pct']:.1f}%  "
+                f"valid-walk {res['valid_walk_pct']:.1f}%  "
+                f"semantic {res['semantic_success_pct']:.1f}%  "
+                f"full+EOS {res['full_success_pct']:.1f}%"
+            )
+            lines.append(
+                f"         start {res['correct_start_pct']:.1f}%  "
+                f"end {res['correct_end_pct']:.1f}%  "
+                f"waypoints {res['waypoints_in_order_pct']:.1f}%  "
+                f"piecewise-simple {res['piecewise_simple_pct']:.1f}%  "
+                f"terminated {res['terminated_pct']:.1f}%"
+            )
+            continue
         div = res["diversity"]
         mem = div["memorisation_frac"]
         decodable = res.get("decodable_pct")

@@ -4,7 +4,7 @@ A dataset directory contains::
 
     manifest.json     config + config_hash + certification report + stats
     codebook.json     graph + every B_v (enough to rebuild the Language alone)
-    train.jsonl       one record per line: {bits, noised_bits, walk, cuts}
+    train.jsonl       one LM Sample or path-QA QASample record per line
     valid.jsonl
     test.jsonl
 
@@ -24,6 +24,7 @@ from .config import Config, config_hash, parse_config
 from .dataset import Splits, pool_stats
 from .graphs import GridGraph, graph_from_dict
 from .language import Language, LanguageReport, Sample
+from .qa import QASample, qa_pool_stats
 
 MANIFEST = "manifest.json"
 CODEBOOK = "codebook.json"
@@ -38,18 +39,19 @@ class LoadedDataset:
     manifest: dict[str, Any]
 
 
-def _write_jsonl(path: Path, samples: Iterable[Sample]) -> None:
+def _write_jsonl(path: Path, samples: Iterable[Sample | QASample]) -> None:
     with path.open("w", encoding="utf-8") as fh:
         for sample in samples:
             fh.write(json.dumps(sample.to_dict(), separators=(",", ":")))
             fh.write("\n")
 
 
-def _read_jsonl(path: Path) -> tuple[Sample, ...]:
+def _read_jsonl(path: Path, qa: bool = False) -> tuple[Sample | QASample, ...]:
     if not path.exists():
         return ()
     with path.open("r", encoding="utf-8") as fh:
-        return tuple(Sample.from_dict(json.loads(line)) for line in fh if line.strip())
+        sample_type = QASample if qa else Sample
+        return tuple(sample_type.from_dict(json.loads(line)) for line in fh if line.strip())
 
 
 def save_dataset(
@@ -80,7 +82,10 @@ def save_dataset(
         "config_hash": config_hash(cfg),
         "certification": report.to_dict(),
         "stats": {
-            "splits": {name: pool_stats(split) for name, split in splits.items()},
+            "splits": {
+                name: (qa_pool_stats(split) if cfg.task.type == "path-qa" else pool_stats(split))
+                for name, split in splits.items()
+            },
             "codeword_pool_size": len(language.codebooks.global_code()),
             "codeword_length_histogram": {
                 str(length): count
@@ -115,10 +120,11 @@ def load_dataset(dir_path: str | Path, load_splits: bool = True) -> LoadedDatase
     graph, books, walk_len = load_codebook(path)
     language = Language(graph=graph, codebooks=books, walk_len=walk_len)
     if load_splits:
+        qa = cfg.task.type == "path-qa"
         splits = Splits(
-            train=_read_jsonl(path / SPLIT_FILES["train"]),
-            valid=_read_jsonl(path / SPLIT_FILES["valid"]),
-            test=_read_jsonl(path / SPLIT_FILES["test"]),
+            train=_read_jsonl(path / SPLIT_FILES["train"], qa=qa),
+            valid=_read_jsonl(path / SPLIT_FILES["valid"], qa=qa),
+            test=_read_jsonl(path / SPLIT_FILES["test"], qa=qa),
         )
     else:
         splits = Splits(train=(), valid=(), test=())

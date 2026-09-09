@@ -1,0 +1,25 @@
+model:
+  size: micro
+  context_len: 1600
+  vocab_size: 6 # {0, 1, BOS, EOS, PAD, _}
+
+data:
+  dataset_dir: ../data/outputs/path_qa_overlap
+  mode: frozen
+
+train:
+  max_steps: 2000
+  batch_size: 32
+  lr: 3.0e-4
+  warmup: 100
+  log_every: 50
+  eval_every: 250
+  seed: 0
+  out_dir: outputs/path_qa_overlap_micro
+
+eval:
+  n_samples: 200
+  temperature: 1.0
+  cuts: [0] # ignored for path-QA; every prompt ends at _
+  max_len: 1600
+  gen_batch_size: 64

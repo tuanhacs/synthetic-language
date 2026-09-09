@@ -84,6 +84,30 @@ variable: the code property.
 
 ## 2. Config schema
 
+The generator supports the original language-modeling task and a conditional
+path-QA task. In path-QA, the question is a sequence of waypoint vertices and
+the answer concatenates one simple graph path for every consecutive waypoint
+pair. Vertices may repeat across different segments; only each individual
+segment must be simple. The serialized training text is
+`query_bits_answer_bits`, with `_` as the sole separator and the same codebooks
+used on both sides.
+
+```yaml
+task:
+  type: path-qa
+  query_len: [2, 4]
+  segment_len: [2, 14]
+  path_trials: 1000
+  split_mode: iid                # iid | held-out-pairs
+  pair_direction: unordered      # [u,v] and [v,u] are the same held-out pair
+  held_out_pairs: []             # required in test, excluded from train/valid
+```
+
+With arbitrary-overlap codebooks, query waypoints use private codewords so the
+question is unambiguous. Answer paths may use every assigned codeword, including
+shared ones. See `configs/path_qa_iid.yaml` and
+`configs/path_qa_heldout.yaml`.
+
 One dataset = one YAML file + a seed. **Any change inside the `language` block is a different
 language, hence a different dataset.** See [`configs/smoke_4x4_prefix.yaml`](configs/smoke_4x4_prefix.yaml).
 
@@ -236,6 +260,10 @@ Each record carries the full ground truth, so later analyses never need to re-de
 * `cuts` — bit offset just *after* each codeword, so `len(cuts) == len(walk)` and
   `cuts[-1] == len(bits)`.
 
+For path-QA, each JSONL record stores `query_bits`, `answer_bits`,
+`query_vertices`, `answer_walk`, `query_cuts`, `answer_cuts`, and
+`segment_cuts`. No textual QUESTION/ANSWER tokens are used.
+
 Reload everything with:
 
 ```python
@@ -305,7 +333,8 @@ makes every continuation of a live parse state completable.
 
 ## 5. Tokenisation and the two data modes
 
-Tokenisation is **bit-level**: vocabulary `{0, 1, BOS, EOS, PAD}` (5 tokens). Codeword-level
+Tokenisation is **bit-level**: vocabulary `{0, 1, BOS, EOS, PAD}` (5 tokens) for
+language modeling, or `{0, 1, BOS, EOS, PAD, _}` (6 tokens) for path-QA. Codeword-level
 tokens would hand the segmentation to the model for free — exactly the difficulty under study.
 Training format is `BOS + bits + EOS`, sentences concatenated and cut into fixed context windows
 (sentences are *not* aligned to window boundaries):

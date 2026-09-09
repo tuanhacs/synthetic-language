@@ -21,6 +21,7 @@ from .config import (
     LanguageConfig,
     OverlapConfig,
     NoiseConfig,
+    TaskConfig,
     config_hash,
     load_config,
     parse_config,
@@ -29,6 +30,14 @@ from .dataset import Splits, build_pool, nested_subsets, pool_stats, split_pool,
 from .graphs import GridGraph, make_grid
 from .language import Language, LanguageReport, Sample
 from .noise import apply_noise
+from .qa import (
+    QASample,
+    build_qa_splits,
+    is_piecewise_simple_answer,
+    sample_qa,
+    validate_qa_answer,
+    waypoints_in_order,
+)
 from .storage import load_dataset, save_dataset
 from .tokenizer import BitTokenizer
 
@@ -51,6 +60,8 @@ __all__ = [
     "OverlapConfig",
     "LanguageReport",
     "NoiseConfig",
+    "TaskConfig",
+    "QASample",
     "Sample",
     "Splits",
     "apply_noise",
@@ -58,6 +69,7 @@ __all__ = [
     "assign_arbitrary_overlap",
     "assign_disjoint_random",
     "build_pool",
+    "build_qa_splits",
     "certify",
     "config_hash",
     "load_config",
@@ -69,6 +81,10 @@ __all__ = [
     "parse_config",
     "pool_stats",
     "save_dataset",
+    "sample_qa",
+    "validate_qa_answer",
+    "waypoints_in_order",
+    "is_piecewise_simple_answer",
     "split_pool",
     "stream",
 ]

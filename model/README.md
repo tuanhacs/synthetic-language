@@ -1,11 +1,13 @@
 # `model/` — transformer family, training, evaluation
 
-This package pre-trains **decoder-only transformers** purely autoregressively on the
-synthetic graph-walk language produced by [`../data`](../data/README.md), and scores
-what they generate against the language's **exact decoder** and **entropy floor**.
+This package trains **decoder-only transformers** autoregressively on either the
+synthetic graph-walk language or its conditional path-QA task produced by
+[`../data`](../data/README.md), and scores generations with the exact decoder.
 
-There is no supervised task. The model sees only `BOS + bits + EOS` streams; the
-graph, the codebooks and the segmentation never appear in the input. Research
+Language modeling uses `BOS + bits + EOS`. Path-QA uses
+`BOS + query_bits + _ + answer_bits + EOS`, with loss masked through `_` so only
+answer bits and EOS are supervised. The graph, codebooks and segmentation never
+appear in the input. Research
 context and the full experiment plan: [`../docs/context.md`](../docs/context.md)
 (§7 model, §8 evaluation).
 
@@ -23,8 +25,8 @@ are attributable to `(N params, D tokens, language difficulty)` and nothing else
 * **weight tying**: `lm_head.weight is embed.weight`
 * no GQA or MoE; generation uses a per-layer KV cache
 
-Vocabulary is `{0, 1, BOS, EOS, PAD}` = **5 tokens**, taken from `synthdata`'s
-`BitTokenizer`; `build_model` asserts the two agree. Because the vocabulary is so
+Vocabulary is 5 tokens for language modeling and adds `_` for 6 tokens in
+path-QA, taken from `synthdata`'s `BitTokenizer`; `build_model` asserts the two agree. Because the vocabulary is so
 small, the embedding is negligible and parameter counts are essentially all
 non-embedding — which is exactly what makes sub-million-parameter models meaningful
 here.
@@ -134,6 +136,12 @@ A checkpoint stores `{model: state_dict, config: full run config, step,
 valid_bits_per_token}`, so `evaluate.py` / `generate.py` need nothing but the file
 (the dataset directory comes from the stored config, overridable with `--dataset`).
 
+For a path-QA checkpoint, `evaluate.py` automatically supplies each test prompt
+as `query_bits + "_"`. It reports decodability, graph-walk validity, endpoints,
+waypoint order, per-segment simplicity, semantic success and exact-reference
+rates. Semantic success accepts any route satisfying the question, not only the
+stored reference route.
+
 ---
 
 ## 5. Data pipeline (`data.py`)
@@ -143,6 +151,11 @@ own packer) into windows of `context_len + 1` tokens, so a batch yields inputs
 `w[:, :-1]` and targets `w[:, 1:]` covering exactly `context_len` positions. Sentences
 are concatenated and *not* aligned to window boundaries, as in the CFG paper.
 `BatchSampler` draws uniform random windows from its own seeded `torch.Generator`.
+
+For path-QA, model inputs remain ordinary six-token IDs. Targets through `_` are
+ignored; answer tokens and answer EOS contribute to the loss. The target mask is
+preserved even when packed windows cross example boundaries. Streaming mode is
+currently rejected for path-QA.
 
 **Streaming mode** — `stream_batches` wraps `synthdata.dataset.stream` into an
 infinite batch iterator, packed identically. For later infinite-data scaling runs;

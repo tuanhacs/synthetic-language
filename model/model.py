@@ -255,7 +255,7 @@ def build_model(cfg: ModelConfig, tokenizer=None) -> Model:
         import _paths  # noqa: F401  (sys.path shim for synthdata)
         from synthdata.tokenizer import BitTokenizer
 
-        tokenizer = BitTokenizer()
+        tokenizer = BitTokenizer(include_separator=cfg.vocab_size == 6)
     if cfg.vocab_size != tokenizer.vocab_size:
         raise ValueError(
             f"model vocab_size {cfg.vocab_size} != BitTokenizer vocab_size {tokenizer.vocab_size}"

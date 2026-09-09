@@ -71,7 +71,21 @@ def main(argv: list[str] | None = None) -> int:
     ds = load_dataset(args.dataset)
     split = {"train": ds.splits.train, "valid": ds.splits.valid, "test": ds.splits.test}[args.split]
     for sample in split[: args.sample]:
-        show(ds.language, sample.bits, truth=sample.walk, oracle=args.oracle)
+        if hasattr(sample, "query_vertices"):
+            print(
+                f"\nquery vertices: {sample.query_vertices}\n"
+                f"query bits:     {sample.query_bits}_"
+            )
+            show(
+                ds.language,
+                sample.answer_bits,
+                truth=sample.answer_walk,
+                oracle=False,
+            )
+            if args.oracle:
+                print("  note: the LM next-bit oracle is not a conditional path-QA oracle")
+        else:
+            show(ds.language, sample.bits, truth=sample.walk, oracle=args.oracle)
     return 0
 
 

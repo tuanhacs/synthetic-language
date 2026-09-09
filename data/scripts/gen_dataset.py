@@ -29,6 +29,7 @@ from synthdata.dataset import build_pool, pool_stats, split_pool  # noqa: E402
 from synthdata.graphs import graph_from_spec  # noqa: E402
 from synthdata.language import Language  # noqa: E402
 from synthdata.noise import apply_noise  # noqa: E402
+from synthdata.qa import build_qa_splits, qa_pool_stats  # noqa: E402
 from synthdata.storage import save_dataset  # noqa: E402
 
 
@@ -119,7 +120,19 @@ def build(
 
     language = Language(graph=graph, codebooks=codebooks, walk_len=cfg.data.walk_len)
 
-    worst_bits = cfg.data.walk_len[1] * language.codebooks.global_code().max_len + 2
+    max_word_len = language.codebooks.global_code().max_len
+    if cfg.task.type == "path-qa":
+        max_waypoints = cfg.task.query_len[1]
+        # Adjacent answer segments share their boundary waypoint.
+        max_answer_vertices = 1 + (max_waypoints - 1) * (cfg.task.segment_len[1] - 1)
+        worst_bits = (
+            max_waypoints * max_word_len
+            + 1  # '_'
+            + max_answer_vertices * max_word_len
+            + 2  # BOS/EOS
+        )
+    else:
+        worst_bits = cfg.data.walk_len[1] * max_word_len + 2
     if worst_bits > cfg.data.context_len:
         log(
             f"[warn] actual worst-case sentence length {worst_bits} bits exceeds "
@@ -141,27 +154,33 @@ def build(
     if not report.unique_decoding:
         raise SystemExit("ABORT: language does not guarantee unique decoding")
 
-    pool = build_pool(language, cfg.data, rngs["pool"], pool_tokens=pool_tokens)
-    log(f"\npool: {len(pool)} unique sentences, {sum(len(s.bits) for s in pool)} bits")
-
-    if cfg.data.noise is not None:
-        pool = apply_noise(pool, cfg.data.noise, rngs["noise"], language=language)
-        n_noised = sum(1 for s in pool if s.noised_bits is not None)
-        log(f"noise {cfg.data.noise.to_dict()}: {n_noised}/{len(pool)} sentences corrupted")
-
-    splits = split_pool(pool, cfg.data.split, rng=rngs["split"])
+    if cfg.task.type == "path-qa":
+        splits = build_qa_splits(
+            language, cfg.task, cfg.data, rngs["pool"], pool_tokens=pool_tokens
+        )
+        pool = [sample for _, split in splits.items() for sample in split]
+    else:
+        pool = build_pool(language, cfg.data, rngs["pool"], pool_tokens=pool_tokens)
+        if cfg.data.noise is not None:
+            pool = apply_noise(pool, cfg.data.noise, rngs["noise"], language=language)
+            n_noised = sum(1 for s in pool if s.noised_bits is not None)
+            log(f"noise {cfg.data.noise.to_dict()}: {n_noised}/{len(pool)} sentences corrupted")
+        splits = split_pool(pool, cfg.data.split, rng=rngs["split"])
+    log(f"\npool: {len(pool)} unique examples, {sum(len(s.bits) for s in pool)} tokens")
     log(f"splits: {splits.sizes()} | bits {splits.total_bits()}")
 
     extra: dict[str, object] = {}
     if source_pool_path is not None:
         extra["codeword_pool_file"] = cfg.language.codeword_pool_file
         extra["source_codeword_pool_size"] = len(pool_code)
-    if entropy_samples > 0:
+    if entropy_samples > 0 and cfg.task.type != "path-qa":
         held_out = (splits.valid or splits.train)[:entropy_samples]
         floor = language.entropy_floor(held_out)
         extra["entropy_floor_bits_per_token"] = floor
         extra["entropy_floor_samples"] = len(held_out)
         log(f"entropy floor: {floor:.4f} bits/token (on {len(held_out)} held-out sentences)")
+    elif entropy_samples > 0:
+        log("[note] entropy floor is not defined for answer-conditioned path-QA")
     return language, splits, report, base, extra
 
 
@@ -210,14 +229,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"\nwritten to {out.resolve()}")
     for name, split in splits.items():
-        stats = pool_stats(split)
+        stats = qa_pool_stats(split) if cfg.task.type == "path-qa" else pool_stats(split)
         if stats["num_sentences"]:
-            print(
-                f"  {name:5s} {stats['num_sentences']:7d} sentences  "
-                f"{stats['total_bits']:9d} bits  "
-                f"len {stats['sentence_bits']['min']}..{stats['sentence_bits']['max']} "
-                f"(mean {stats['sentence_bits']['mean']:.1f})"
-            )
+            if cfg.task.type == "path-qa":
+                print(
+                    f"  {name:5s} {stats['num_sentences']:7d} examples  "
+                    f"{stats['total_bits']:9d} tokens  answer "
+                    f"{stats['answer_bits']['min']}..{stats['answer_bits']['max']} bits"
+                )
+            else:
+                print(
+                    f"  {name:5s} {stats['num_sentences']:7d} sentences  "
+                    f"{stats['total_bits']:9d} bits  "
+                    f"len {stats['sentence_bits']['min']}..{stats['sentence_bits']['max']} "
+                    f"(mean {stats['sentence_bits']['mean']:.1f})"
+                )
     return 0
 
 

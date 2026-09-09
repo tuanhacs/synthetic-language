@@ -27,6 +27,7 @@ def generate(
     rng: torch.Generator | None = None,
     batch_size: int = 64,
     forbid_bos: bool = True,
+    forbid_separator: bool | None = None,
 ) -> list[str]:
     """Sample ``n`` sentences and return them as bit strings.
 
@@ -41,6 +42,10 @@ def generate(
     if temperature <= 0:
         raise ValueError("temperature must be > 0 (greedy decoding is not part of the protocol)")
     max_len = max_len or model.cfg.context_len
+    if max_len > model.cfg.context_len:
+        raise ValueError(
+            f"max_len {max_len} exceeds model context_len {model.cfg.context_len}"
+        )
 
     if prefix_bits is None:
         prefixes = [""] * n
@@ -50,6 +55,8 @@ def generate(
         prefixes = list(prefix_bits)
         if len(prefixes) != n:
             raise ValueError(f"got {len(prefixes)} prefixes for n={n}")
+    if forbid_separator is None:
+        forbid_separator = tokenizer.include_separator and any("_" in p for p in prefixes)
 
     model.eval()
     out: list[str] = []
@@ -57,7 +64,7 @@ def generate(
         out.extend(
             _generate_batch(
                 model, tokenizer, prefixes[start : start + batch_size],
-                temperature, max_len, device, rng, forbid_bos,
+                temperature, max_len, device, rng, forbid_bos, forbid_separator,
             )
         )
     return out
@@ -72,6 +79,7 @@ def _generate_batch(
     device: torch.device | str,
     rng: torch.Generator | None,
     forbid_bos: bool,
+    forbid_separator: bool,
 ) -> list[str]:
     """Generate one batch with a KV cache.
 
@@ -101,6 +109,7 @@ def _generate_batch(
                 device,
                 rng,
                 forbid_bos,
+                forbid_separator,
             )
             for row, string in zip(rows, group_out):
                 ordered[row] = string
@@ -118,6 +127,8 @@ def _generate_batch(
         last[:, tok.PAD] = float("-inf")
         if forbid_bos:
             last[:, tok.BOS] = float("-inf")
+        if forbid_separator and tok.include_separator:
+            last[:, tok.SEP] = float("-inf")
         # Sampling happens on CPU: the vocabulary has 5 entries, so the transfer is
         # free, and a CPU generator keeps the draws identical across devices.
         probs = torch.softmax(last, dim=-1).cpu()

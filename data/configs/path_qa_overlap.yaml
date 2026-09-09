@@ -1,0 +1,27 @@
+language:
+  graph: grid-6x6
+  codeword_pool_file: ../codeword_pools/hard_ud_codebook_200.json
+  code:
+    type: ud
+  k: [1, 4]
+  assignment: arbitrary-overlap
+  overlap:
+    support_size: [2, 4]
+    shared_codewords: 12
+    max_restarts: 100
+    candidate_trials: 10_000
+
+data:
+  pool_tokens: 20_000_000
+  split: [80, 10, 10]
+  seed: 0
+  noise: null
+  context_len: 1600
+
+task:
+  type: path-qa
+  query_len: [2, 4]
+  segment_len: [2, 14]
+  path_trials: 1000
+  split_mode: iid
+  pair_direction: unordered

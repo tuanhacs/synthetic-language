@@ -18,6 +18,9 @@ import yaml
 CODE_TYPES = ("prefix-free", "suffix-free", "ud")
 ASSIGNMENTS = ("disjoint-random", "arbitrary-overlap")
 NOISE_TYPES = ("bit-flip", "bit-delete", "vertex-noise")
+TASK_TYPES = ("language-modeling", "path-qa")
+QA_SPLIT_MODES = ("iid", "held-out-pairs")
+PAIR_DIRECTIONS = ("ordered", "unordered")
 
 _GRAPH_RE = re.compile(r"^grid[-_ ]?(\d+)\s*x\s*(\d+)$", re.IGNORECASE)
 
@@ -161,12 +164,43 @@ class DataConfig:
 
 
 @dataclass(frozen=True)
+class TaskConfig:
+    """Dataset objective; path-QA fields are ignored for language modeling."""
+
+    type: str = "language-modeling"
+    query_len: tuple[int, int] = (2, 5)
+    segment_len: tuple[int, int] = (2, 16)
+    path_trials: int = 1_000
+    split_mode: str = "iid"
+    pair_direction: str = "unordered"
+    held_out_pairs: tuple[tuple[int, int], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"type": self.type}
+        if self.type == "path-qa":
+            out.update(
+                query_len=list(self.query_len),
+                segment_len=list(self.segment_len),
+                path_trials=self.path_trials,
+                split_mode=self.split_mode,
+                pair_direction=self.pair_direction,
+                held_out_pairs=[list(pair) for pair in self.held_out_pairs],
+            )
+        return out
+
+
+@dataclass(frozen=True)
 class Config:
     language: LanguageConfig = field(default_factory=LanguageConfig)
     data: DataConfig = field(default_factory=DataConfig)
+    task: TaskConfig = field(default_factory=TaskConfig)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"language": self.language.to_dict(), "data": self.data.to_dict()}
+        return {
+            "language": self.language.to_dict(),
+            "data": self.data.to_dict(),
+            "task": self.task.to_dict(),
+        }
 
 
 # --------------------------------------------------------------------------- #
@@ -181,6 +215,13 @@ def _pair(value: Any, name: str) -> tuple[int, int]:
     if lo > hi:
         raise ConfigError(f"{name}: min ({lo}) must be <= max ({hi})")
     return lo, hi
+
+
+def _vertex_pair(value: Any, name: str) -> tuple[int, int]:
+    """Parse an ordered vertex pair without treating it as a numeric range."""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ConfigError(f"{name} must be a [u, v] pair, got {value!r}")
+    return int(value[0]), int(value[1])
 
 
 def _code_config(raw: dict[str, Any]) -> CodeConfig:
@@ -230,6 +271,37 @@ def _overlap_config(raw: Any) -> OverlapConfig | None:
     )
 
 
+def _task_config(raw: Any) -> TaskConfig:
+    if raw is None:
+        return TaskConfig()
+    if not isinstance(raw, dict):
+        raise ConfigError("task must be a mapping")
+    unknown = set(raw) - {
+        "type", "query_len", "segment_len", "path_trials", "split_mode",
+        "pair_direction", "held_out_pairs",
+    }
+    if unknown:
+        raise ConfigError(f"unknown task fields: {sorted(unknown)}")
+    task_type = str(raw.get("type", "language-modeling"))
+    if task_type not in TASK_TYPES:
+        raise ConfigError(f"task.type must be one of {TASK_TYPES}, got {task_type!r}")
+    if task_type == "language-modeling" and set(raw) - {"type"}:
+        raise ConfigError("path-QA fields require task.type: path-qa")
+    pairs_raw = raw.get("held_out_pairs", [])
+    if not isinstance(pairs_raw, (list, tuple)):
+        raise ConfigError("task.held_out_pairs must be a list of [u, v] pairs")
+    pairs = tuple(_vertex_pair(pair, "task.held_out_pairs entry") for pair in pairs_raw)
+    return TaskConfig(
+        type=task_type,
+        query_len=_pair(raw.get("query_len", [2, 5]), "task.query_len"),
+        segment_len=_pair(raw.get("segment_len", [2, 16]), "task.segment_len"),
+        path_trials=int(raw.get("path_trials", 1_000)),
+        split_mode=str(raw.get("split_mode", "iid")),
+        pair_direction=str(raw.get("pair_direction", "unordered")),
+        held_out_pairs=pairs,
+    )
+
+
 def _noise_config(raw: Any) -> NoiseConfig | None:
     if raw is None:
         return None
@@ -247,7 +319,7 @@ def _noise_config(raw: Any) -> NoiseConfig | None:
 
 def parse_config(raw: dict[str, Any]) -> Config:
     """Build a validated :class:`Config` from a plain dict."""
-    unknown = set(raw) - {"language", "data"}
+    unknown = set(raw) - {"language", "data", "task"}
     if unknown:
         raise ConfigError(f"unknown top-level fields: {sorted(unknown)}")
     lang_raw = dict(raw.get("language") or {})
@@ -298,7 +370,7 @@ def parse_config(raw: dict[str, Any]) -> Config:
         context_len=int(data_raw.get("context_len", 512)),
     )
 
-    cfg = Config(language=language, data=data)
+    cfg = Config(language=language, data=data, task=_task_config(raw.get("task")))
     validate_config(cfg)
     return cfg
 
@@ -379,6 +451,43 @@ def validate_config(cfg: Config) -> list[str]:
     if cfg.data.context_len < 8:
         raise ConfigError("data.context_len must be >= 8")
 
+    task = cfg.task
+    if task.type == "path-qa":
+        qlo, qhi = task.query_len
+        slo, shi = task.segment_len
+        if qlo < 2 or qhi > n_v:
+            raise ConfigError(f"task.query_len must lie in [2, |V|={n_v}]")
+        if slo < 2 or shi > n_v:
+            raise ConfigError(f"task.segment_len must lie in [2, |V|={n_v}]")
+        if task.path_trials < 1:
+            raise ConfigError("task.path_trials must be >= 1")
+        if task.split_mode not in QA_SPLIT_MODES:
+            raise ConfigError(
+                f"task.split_mode must be one of {QA_SPLIT_MODES}, got {task.split_mode!r}"
+            )
+        if task.pair_direction not in PAIR_DIRECTIONS:
+            raise ConfigError(
+                f"task.pair_direction must be one of {PAIR_DIRECTIONS}, "
+                f"got {task.pair_direction!r}"
+            )
+        if task.split_mode == "held-out-pairs" and not task.held_out_pairs:
+            raise ConfigError("held-out-pairs mode requires task.held_out_pairs")
+        for u, v in task.held_out_pairs:
+            if u == v or not (0 <= u < n_v and 0 <= v < n_v):
+                raise ConfigError(
+                    f"invalid held-out pair {(u, v)} for vertices 0..{n_v - 1}"
+                )
+        pair_keys = [
+            tuple(sorted(pair)) if task.pair_direction == "unordered" else pair
+            for pair in task.held_out_pairs
+        ]
+        if len(set(pair_keys)) != len(pair_keys):
+            raise ConfigError("task.held_out_pairs contains duplicate effective pairs")
+        if cfg.data.noise is not None:
+            raise ConfigError("data.noise is not yet supported for task.type: path-qa")
+        if cfg.data.reverse_walks:
+            raise ConfigError("data.reverse_walks is not applicable to task.type: path-qa")
+
     if external_pool:
         return []  # file-dependent checks and length warnings run during the build
 
@@ -388,12 +497,25 @@ def validate_config(cfg: Config) -> list[str]:
             f"pool slack is small: |C|^x = {pool_size} vs required {needed} "
             "(little room for future overlap constructions)"
         )
-    # +2 for BOS/EOS in the packed stream.
-    worst_bits = whi * hi * code.power_x + 2
+    max_word_len = hi * code.power_x
+    if task.type == "path-qa":
+        max_waypoints = task.query_len[1]
+        max_answer_vertices = 1 + (max_waypoints - 1) * (task.segment_len[1] - 1)
+        worst_bits = (
+            max_waypoints * max_word_len + 1
+            + max_answer_vertices * max_word_len + 2
+        )
+    else:
+        worst_bits = whi * max_word_len + 2
+    worst_description = (
+        "max query plus piecewise-simple answer"
+        if task.type == "path-qa"
+        else f"walk_len max {whi} x codeword max {max_word_len} bits"
+    )
     if worst_bits > cfg.data.context_len:
         warnings.append(
-            f"worst-case sentence length {worst_bits} bits (walk_len max {whi} x codeword max "
-            f"{hi * code.power_x} bits + BOS/EOS) exceeds context_len {cfg.data.context_len}; "
+            f"worst-case sentence length {worst_bits} tokens ({worst_description}) "
+            f"exceeds context_len {cfg.data.context_len}; "
             "actual codeword lengths depend on the sampled base code — check the build report"
         )
     return warnings
