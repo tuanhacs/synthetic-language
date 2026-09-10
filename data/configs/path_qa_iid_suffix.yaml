@@ -10,7 +10,7 @@ language:
   assignment: disjoint-random
 
 data:
-  pool_tokens: 120_000_000
+  pool_tokens: 200_000_000
   split: [80, 10, 10]
   seed: 0
   noise: null

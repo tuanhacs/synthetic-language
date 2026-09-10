@@ -1,13 +1,13 @@
 language:
   graph: grid-6x6
-  codeword_pool_file: ../codeword_pools/hard_ud_codebook_200_v2.json
+  codeword_pool_file: ../codeword_pools/hard_ud_codebook_200.json
   code:
     type: ud
   k: [1, 4]
   assignment: disjoint-random
 
 data:
-  pool_tokens: 20_000_000
+  pool_tokens: 300_000_000
   split: [80, 10, 10]
   seed: 0
   noise: null
