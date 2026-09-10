@@ -18,7 +18,7 @@ data:
 
 task:
   type: path-qa
-  query_len: [2, 4]
+  query_len: [2, 6]
   segment_len: [2, 14]
   path_trials: 1000
   split_mode: iid
