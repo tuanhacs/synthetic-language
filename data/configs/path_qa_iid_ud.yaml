@@ -4,12 +4,7 @@ language:
   code:
     type: ud
   k: [1, 4]
-  assignment: arbitrary-overlap
-  overlap:
-    support_size: [2, 4]
-    shared_codewords: 12
-    max_restarts: 100
-    candidate_trials: 10_000
+  assignment: disjoint-random
 
 data:
   pool_tokens: 200_000_000
