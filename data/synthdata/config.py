@@ -19,7 +19,7 @@ CODE_TYPES = ("prefix-free", "suffix-free", "ud")
 ASSIGNMENTS = ("disjoint-random", "arbitrary-overlap")
 NOISE_TYPES = ("bit-flip", "bit-delete", "vertex-noise")
 TASK_TYPES = ("language-modeling", "path-qa")
-QA_SPLIT_MODES = ("iid", "held-out-pairs")
+QA_SPLIT_MODES = ("iid", "held-out-pairs", "cross-region")
 PAIR_DIRECTIONS = ("ordered", "unordered")
 
 _GRAPH_RE = re.compile(r"^grid[-_ ]?(\d+)\s*x\s*(\d+)$", re.IGNORECASE)
@@ -174,6 +174,7 @@ class TaskConfig:
     split_mode: str = "iid"
     pair_direction: str = "unordered"
     held_out_pairs: tuple[tuple[int, int], ...] = ()
+    region_overlap_rows: int = 2
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": self.type}
@@ -185,6 +186,7 @@ class TaskConfig:
                 split_mode=self.split_mode,
                 pair_direction=self.pair_direction,
                 held_out_pairs=[list(pair) for pair in self.held_out_pairs],
+                region_overlap_rows=self.region_overlap_rows,
             )
         return out
 
@@ -278,7 +280,7 @@ def _task_config(raw: Any) -> TaskConfig:
         raise ConfigError("task must be a mapping")
     unknown = set(raw) - {
         "type", "query_len", "segment_len", "path_trials", "split_mode",
-        "pair_direction", "held_out_pairs",
+        "pair_direction", "held_out_pairs", "region_overlap_rows",
     }
     if unknown:
         raise ConfigError(f"unknown task fields: {sorted(unknown)}")
@@ -299,6 +301,7 @@ def _task_config(raw: Any) -> TaskConfig:
         split_mode=str(raw.get("split_mode", "iid")),
         pair_direction=str(raw.get("pair_direction", "unordered")),
         held_out_pairs=pairs,
+        region_overlap_rows=int(raw.get("region_overlap_rows", 2)),
     )
 
 
@@ -472,6 +475,10 @@ def validate_config(cfg: Config) -> list[str]:
             )
         if task.split_mode == "held-out-pairs" and not task.held_out_pairs:
             raise ConfigError("held-out-pairs mode requires task.held_out_pairs")
+        if task.split_mode != "held-out-pairs" and task.held_out_pairs:
+            raise ConfigError(
+                "task.held_out_pairs is only valid with split_mode: held-out-pairs"
+            )
         for u, v in task.held_out_pairs:
             if u == v or not (0 <= u < n_v and 0 <= v < n_v):
                 raise ConfigError(
@@ -483,6 +490,20 @@ def validate_config(cfg: Config) -> list[str]:
         ]
         if len(set(pair_keys)) != len(pair_keys):
             raise ConfigError("task.held_out_pairs contains duplicate effective pairs")
+        if task.split_mode == "cross-region":
+            overlap_rows = task.region_overlap_rows
+            grid_n = cfg.language.grid_n
+            if not (1 <= overlap_rows < grid_n):
+                raise ConfigError(
+                    f"task.region_overlap_rows must lie in [1, {grid_n - 1}]"
+                )
+            if (grid_n - overlap_rows) % 2:
+                raise ConfigError(
+                    "grid rows minus region_overlap_rows must be even for a "
+                    "symmetric cross-region split"
+                )
+            if (grid_n - overlap_rows) // 2 < 1:
+                raise ConfigError("cross-region mode needs non-empty outer row bands")
         if cfg.data.noise is not None:
             raise ConfigError("data.noise is not yet supported for task.type: path-qa")
         if cfg.data.reverse_walks:

@@ -28,7 +28,12 @@ import torch.nn.functional as F
 
 import _paths  # noqa: F401  (sys.path shim for synthdata; must precede synthdata imports)
 from synthdata.language import Language, Sample
-from synthdata.qa import QASample, validate_qa_answer
+from synthdata.qa import (
+    QASample,
+    cross_region_direction,
+    cross_region_segment_count,
+    validate_qa_answer,
+)
 
 from config import EvalConfig
 from data import IGNORE_INDEX, PackedData, sentence_batches
@@ -233,6 +238,7 @@ def eval_path_qa(
     device: torch.device | str = "cpu",
     rng: torch.Generator | None = None,
     batch_size: int = 64,
+    task_config: dict | None = None,
 ) -> dict:
     """Prompt with ``query_bits + '_'`` and score any semantically valid route."""
     if not test_samples:
@@ -269,6 +275,12 @@ def eval_path_qa(
     examples: list[dict] = []
     answer_vertices = 0
     decoded_answers = 0
+    cross_enabled = bool(
+        task_config and task_config.get("split_mode") == "cross-region"
+    )
+    overlap_rows = int((task_config or {}).get("region_overlap_rows", 2))
+    by_cross_count: dict[int, dict[str, int]] = {}
+    by_direction: dict[str, dict[str, int]] = {}
     for sample, prefix, full in zip(selected, prefixes, generated):
         if not full.startswith(prefix):
             raise RuntimeError("generator did not preserve the QA prompt")
@@ -286,6 +298,26 @@ def eval_path_qa(
         counts["full_success"] += result["semantic_success"] and terminated
         counts["exact_reference_bits"] += answer == sample.answer_bits
         counts["exact_reference_walk"] += result["walk"] == sample.answer_walk
+        cross_segments = 0
+        direction = None
+        if cross_enabled:
+            cross_segments = cross_region_segment_count(
+                sample.query_vertices, language.graph.n, overlap_rows
+            )
+            direction = cross_region_direction(
+                sample.query_vertices, language.graph.n, overlap_rows
+            )
+            for groups, key in (
+                (by_cross_count, cross_segments),
+                (by_direction, direction or "other"),
+            ):
+                bucket = groups.setdefault(
+                    key, {"n": 0, "valid_walk": 0, "semantic_success": 0, "full_success": 0}
+                )
+                bucket["n"] += 1
+                bucket["valid_walk"] += int(result["valid_walk"])
+                bucket["semantic_success"] += int(result["semantic_success"])
+                bucket["full_success"] += int(result["semantic_success"] and terminated)
         if result["walk"]:
             decoded_answers += 1
             answer_vertices += len(result["walk"])
@@ -299,6 +331,14 @@ def eval_path_qa(
                     "decoded_walk": list(result["walk"]),
                     "terminated": terminated,
                     "semantic_success": result["semantic_success"],
+                    **(
+                        {
+                            "cross_segments": cross_segments,
+                            "cross_direction": direction,
+                        }
+                        if cross_enabled
+                        else {}
+                    ),
                 }
             )
     total = len(selected)
@@ -312,6 +352,28 @@ def eval_path_qa(
         ),
         "examples": examples,
     }
+    if cross_enabled:
+        def summarise(groups: dict) -> dict[str, dict[str, float | int]]:
+            return {
+                str(key): {
+                    "n": bucket["n"],
+                    "valid_walk_pct": 100.0 * bucket["valid_walk"] / bucket["n"],
+                    "semantic_success_pct": (
+                        100.0 * bucket["semantic_success"] / bucket["n"]
+                    ),
+                    "full_success_pct": 100.0 * bucket["full_success"] / bucket["n"],
+                }
+                for key, bucket in sorted(groups.items(), key=lambda item: str(item[0]))
+            }
+
+        report["cross_region"] = {
+            "region_overlap_rows": overlap_rows,
+            "mean_cross_segments": sum(
+                count * bucket["n"] for count, bucket in by_cross_count.items()
+            ) / total,
+            "by_cross_segments": summarise(by_cross_count),
+            "by_direction": summarise(by_direction),
+        }
     return report
 
 
@@ -362,6 +424,7 @@ def run_all(
             device=device,
             rng=rng,
             batch_size=eval_cfg.gen_batch_size,
+            task_config=report["task"],
         )
         if out_dir is not None:
             path = Path(out_dir)
@@ -432,6 +495,13 @@ def format_report(report: dict) -> str:
                 f"piecewise-simple {res['piecewise_simple_pct']:.1f}%  "
                 f"terminated {res['terminated_pct']:.1f}%"
             )
+            if "cross_region" in res:
+                cross = res["cross_region"]
+                lines.append(
+                    f"         cross segments mean={cross['mean_cross_segments']:.2f}  "
+                    f"by-count={cross['by_cross_segments']}"
+                )
+                lines.append(f"         by-direction={cross['by_direction']}")
             continue
         div = res["diversity"]
         mem = div["memorisation_frac"]

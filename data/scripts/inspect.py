@@ -23,6 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from synthdata.storage import load_dataset  # noqa: E402
 from synthdata.qa import (  # noqa: E402
     QASample,
+    cross_region_direction,
+    cross_region_layout,
+    cross_region_segment_count,
     qa_pool_stats,
     query_contains_held_out,
     validate_qa_answer,
@@ -88,6 +91,45 @@ def main(argv: list[str] | None = None) -> int:
                 f"  {name:5s} {stats['num_sentences']:7d} examples  "
                 f"{stats['total_bits']:9d} chars  held-out queries={held}"
             )
+            if cfg.task.split_mode == "cross-region":
+                layout = cross_region_layout(
+                    lang.graph.n, cfg.task.region_overlap_rows
+                )
+                cross_counts = [
+                    cross_region_segment_count(
+                        s.query_vertices, lang.graph.n, cfg.task.region_overlap_rows
+                    )
+                    for s in split
+                ]
+                contained = sum(
+                    (
+                        all(v in layout.upper for v in s.query_vertices)
+                        and all(v in layout.upper for v in s.answer_walk)
+                    )
+                    or (
+                        all(v in layout.lower for v in s.query_vertices)
+                        and all(v in layout.lower for v in s.answer_walk)
+                    )
+                    for s in split
+                )
+                outer_only = sum(
+                    all(
+                        v in layout.top_only or v in layout.bottom_only
+                        for v in s.query_vertices
+                    )
+                    for s in split
+                )
+                directions = Counter(
+                    cross_region_direction(
+                        s.query_vertices, lang.graph.n, cfg.task.region_overlap_rows
+                    )
+                    for s in split
+                )
+                print(
+                    f"        cross queries={sum(n > 0 for n in cross_counts)}/{len(split)} "
+                    f"segments={sum(cross_counts)} region-contained={contained}/{len(split)} "
+                    f"outer-only={outer_only}/{len(split)} directions={dict(directions)}"
+                )
             if split:
                 print(
                     f"        query bits={stats['query_bits']} waypoints={stats['query_waypoints']}\n"

@@ -108,6 +108,25 @@ question is unambiguous. Answer paths may use every assigned codeword, including
 shared ones. See `configs/path_qa_iid.yaml` and
 `configs/path_qa_heldout.yaml`.
 
+For compositional generalisation across two overlapping row regions, use:
+
+```yaml
+task:
+  type: path-qa
+  split_mode: cross-region
+  region_overlap_rows: 2
+  query_len: [2, 4]
+  segment_len: [2, 14]
+```
+
+On a 6x6 grid this defines an upper region spanning human rows 1--4 and a
+lower region spanning rows 3--6. Every train/valid example lives wholly inside
+one region, including its answer paths. Test waypoints use only rows 1--2 and
+5--6, have opposite start/end bands, and therefore contain at least one direct
+cross-region query segment. Validation remains in-distribution and is suitable
+for checkpoint selection; only test measures cross-region generalisation. See
+`configs/path_qa_cross_region.yaml`.
+
 One dataset = one YAML file + a seed. **Any change inside the `language` block is a different
 language, hence a different dataset.** See [`configs/smoke_4x4_prefix.yaml`](configs/smoke_4x4_prefix.yaml).
 

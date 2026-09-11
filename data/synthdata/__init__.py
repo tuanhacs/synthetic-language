@@ -31,8 +31,12 @@ from .graphs import GridGraph, make_grid
 from .language import Language, LanguageReport, Sample
 from .noise import apply_noise
 from .qa import (
+    CrossRegionLayout,
     QASample,
     build_qa_splits,
+    cross_region_direction,
+    cross_region_layout,
+    cross_region_segment_count,
     is_piecewise_simple_answer,
     sample_qa,
     validate_qa_answer,
@@ -61,6 +65,7 @@ __all__ = [
     "LanguageReport",
     "NoiseConfig",
     "TaskConfig",
+    "CrossRegionLayout",
     "QASample",
     "Sample",
     "Splits",
@@ -70,6 +75,9 @@ __all__ = [
     "assign_disjoint_random",
     "build_pool",
     "build_qa_splits",
+    "cross_region_direction",
+    "cross_region_layout",
+    "cross_region_segment_count",
     "certify",
     "config_hash",
     "load_config",

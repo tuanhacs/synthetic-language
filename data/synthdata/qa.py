@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import AbstractSet, Any, Sequence
 
 from .config import DataConfig, TaskConfig
 from .dataset import Splits
@@ -49,6 +49,73 @@ class QASample:
             answer_cuts=tuple(int(v) for v in d["answer_cuts"]),
             segment_cuts=tuple(int(v) for v in d["segment_cuts"]),
         )
+
+
+@dataclass(frozen=True)
+class CrossRegionLayout:
+    """Two overlapping row regions and their disjoint outer test bands."""
+
+    upper: frozenset[int]
+    lower: frozenset[int]
+    top_only: frozenset[int]
+    bottom_only: frozenset[int]
+    upper_rows: tuple[int, int]
+    lower_rows: tuple[int, int]
+    top_only_rows: tuple[int, int]
+    bottom_only_rows: tuple[int, int]
+
+
+def cross_region_layout(grid_n: int, overlap_rows: int) -> CrossRegionLayout:
+    """Return the symmetric cross-region partition for an ``n x n`` grid."""
+    if not (1 <= overlap_rows < grid_n) or (grid_n - overlap_rows) % 2:
+        raise ValueError("invalid symmetric cross-region layout")
+    outer_rows = (grid_n - overlap_rows) // 2
+    upper_end = outer_rows + overlap_rows - 1
+    lower_start = outer_rows
+
+    def vertices(first_row: int, last_row: int) -> frozenset[int]:
+        return frozenset(
+            row * grid_n + column
+            for row in range(first_row, last_row + 1)
+            for column in range(grid_n)
+        )
+
+    return CrossRegionLayout(
+        upper=vertices(0, upper_end),
+        lower=vertices(lower_start, grid_n - 1),
+        top_only=vertices(0, outer_rows - 1),
+        bottom_only=vertices(upper_end + 1, grid_n - 1),
+        upper_rows=(0, upper_end),
+        lower_rows=(lower_start, grid_n - 1),
+        top_only_rows=(0, outer_rows - 1),
+        bottom_only_rows=(upper_end + 1, grid_n - 1),
+    )
+
+
+def cross_region_segment_count(
+    query: Sequence[int], grid_n: int, overlap_rows: int
+) -> int:
+    """Count consecutive query pairs joining top-only and bottom-only bands."""
+    layout = cross_region_layout(grid_n, overlap_rows)
+    return sum(
+        (u in layout.top_only and v in layout.bottom_only)
+        or (u in layout.bottom_only and v in layout.top_only)
+        for u, v in zip(query, query[1:])
+    )
+
+
+def cross_region_direction(
+    query: Sequence[int], grid_n: int, overlap_rows: int
+) -> str | None:
+    """Direction between exclusive bands based on the first and last waypoint."""
+    if not query:
+        return None
+    layout = cross_region_layout(grid_n, overlap_rows)
+    if query[0] in layout.top_only and query[-1] in layout.bottom_only:
+        return "top-to-bottom"
+    if query[0] in layout.bottom_only and query[-1] in layout.top_only:
+        return "bottom-to-top"
+    return None
 
 
 def _pair_key(pair: tuple[int, int], direction: str) -> tuple[int, int]:
@@ -132,8 +199,13 @@ def random_simple_path(
     length_range: tuple[int, int],
     rng: random.Random,
     trials: int,
+    allowed_vertices: AbstractSet[int] | None = None,
 ) -> tuple[int, ...] | None:
     """Find a randomized simple path whose vertex count lies in the range."""
+    if allowed_vertices is not None and (
+        start not in allowed_vertices or end not in allowed_vertices
+    ):
+        return None
     lo, hi = length_range
     for _ in range(trials):
         path = [start]
@@ -144,7 +216,11 @@ def random_simple_path(
                 return len(path) >= lo
             if len(path) >= hi:
                 return False
-            neighbors = list(language.graph.neighbors(v))
+            neighbors = [
+                nxt
+                for nxt in language.graph.neighbors(v)
+                if allowed_vertices is None or nxt in allowed_vertices
+            ]
             rng.shuffle(neighbors)
             # Randomly postponing the target produces non-shortest paths too.
             for nxt in neighbors:
@@ -198,11 +274,43 @@ def sample_qa(
     task: TaskConfig,
     rng: random.Random,
     require_held_out: bool | None = None,
+    cross_role: str | None = None,
 ) -> QASample | None:
-    """Draw one QA example; ``require_held_out`` filters consecutive query pairs."""
+    """Draw one QA example under IID, held-out, or cross-region constraints."""
     length = rng.randint(*task.query_len)
     vertices = list(language.graph.vertices)
-    if require_held_out:
+    allowed_path_vertices: AbstractSet[int] | None = None
+    if cross_role is not None:
+        layout = cross_region_layout(language.graph.n, task.region_overlap_rows)
+        if cross_role in ("upper", "lower"):
+            region = layout.upper if cross_role == "upper" else layout.lower
+            region_vertices = sorted(region)
+            waypoints_list = [rng.choice(region_vertices)]
+            for _ in range(1, length):
+                candidates = [v for v in region_vertices if v != waypoints_list[-1]]
+                waypoints_list.append(rng.choice(candidates))
+            waypoints = tuple(waypoints_list)
+            allowed_path_vertices = region
+        elif cross_role in ("top-to-bottom", "bottom-to-top"):
+            first_band, last_band = (
+                (layout.top_only, layout.bottom_only)
+                if cross_role == "top-to-bottom"
+                else (layout.bottom_only, layout.top_only)
+            )
+            bands = [first_band]
+            bands.extend(
+                rng.choice((layout.top_only, layout.bottom_only))
+                for _ in range(length - 2)
+            )
+            bands.append(last_band)
+            waypoints_list = []
+            for band in bands:
+                candidates = [v for v in sorted(band) if not waypoints_list or v != waypoints_list[-1]]
+                waypoints_list.append(rng.choice(candidates))
+            waypoints = tuple(waypoints_list)
+        else:
+            raise ValueError(f"unknown cross-region sample role: {cross_role!r}")
+    elif require_held_out:
         pair = rng.choice(task.held_out_pairs)
         if task.pair_direction == "unordered" and rng.randrange(2):
             pair = (pair[1], pair[0])
@@ -234,7 +342,13 @@ def sample_qa(
     segments: list[tuple[int, ...]] = []
     for start, end in zip(waypoints, waypoints[1:]):
         segment = random_simple_path(
-            language, start, end, task.segment_len, rng, task.path_trials
+            language,
+            start,
+            end,
+            task.segment_len,
+            rng,
+            task.path_trials,
+            allowed_vertices=allowed_path_vertices,
         )
         if segment is None:
             return None
@@ -271,20 +385,15 @@ def build_qa_splits(
     rng: random.Random,
     pool_tokens: int | None = None,
 ) -> Splits:
-    """Build IID or held-out-pair QA splits to approximately the token budget."""
+    """Build IID, held-out-pair, or cross-region QA splits by token budget."""
     budget = data.pool_tokens if pool_tokens is None else pool_tokens
     weights = data.split
     total_weight = sum(weights)
     budgets = [int(budget * weight / total_weight) for weight in weights]
     budgets[-1] += budget - sum(budgets)
-    requirements = (
-        (None, None, None)
-        if task.split_mode == "iid"
-        else (False, False, True)
-    )
     built: list[tuple[QASample, ...]] = []
     seen: set[str] = set()
-    for target, requirement in zip(budgets, requirements):
+    for split_index, target in enumerate(budgets):
         items: list[QASample] = []
         tokens = 0
         attempts = 0
@@ -295,14 +404,70 @@ def build_qa_splits(
                 raise RuntimeError(
                     f"could not fill QA split budget {target} after {attempts} attempts"
                 )
-            sample = sample_qa(language, task, rng, requirement)
+            if task.split_mode == "iid":
+                sample = sample_qa(language, task, rng)
+            elif task.split_mode == "held-out-pairs":
+                sample = sample_qa(
+                    language, task, rng, require_held_out=(split_index == 2)
+                )
+            elif split_index < 2:
+                # Alternate regions by accepted-item count for an approximately
+                # balanced token/sample mixture in both train and validation.
+                role = "upper" if len(items) % 2 == 0 else "lower"
+                sample = sample_qa(language, task, rng, cross_role=role)
+            else:
+                role = "top-to-bottom" if len(items) % 2 == 0 else "bottom-to-top"
+                sample = sample_qa(language, task, rng, cross_role=role)
             if sample is None or sample.bits in seen:
                 continue
             seen.add(sample.bits)
             items.append(sample)
             tokens += len(sample.bits)
         built.append(tuple(items))
-    return Splits(train=built[0], valid=built[1], test=built[2])
+    splits = Splits(train=built[0], valid=built[1], test=built[2])
+    if task.split_mode == "cross-region":
+        _certify_cross_region_splits(language, task, splits)
+    return splits
+
+
+def _certify_cross_region_splits(
+    language: Language, task: TaskConfig, splits: Splits
+) -> None:
+    """Defensively verify the no-leakage contract after generation."""
+    layout = cross_region_layout(language.graph.n, task.region_overlap_rows)
+    for split_name, split in (("train", splits.train), ("valid", splits.valid)):
+        for sample in split:
+            upper = all(v in layout.upper for v in sample.query_vertices) and all(
+                v in layout.upper for v in sample.answer_walk
+            )
+            lower = all(v in layout.lower for v in sample.query_vertices) and all(
+                v in layout.lower for v in sample.answer_walk
+            )
+            if not (upper or lower):
+                raise RuntimeError(
+                    f"cross-region leakage: {split_name} sample leaves its row region"
+                )
+            if cross_region_segment_count(
+                sample.query_vertices, language.graph.n, task.region_overlap_rows
+            ):
+                raise RuntimeError(
+                    f"cross-region leakage: {split_name} contains an outer-band cross pair"
+                )
+
+    for sample in splits.test:
+        if not all(
+            v in layout.top_only or v in layout.bottom_only
+            for v in sample.query_vertices
+        ):
+            raise RuntimeError("cross-region test waypoint lies outside the outer bands")
+        if cross_region_segment_count(
+            sample.query_vertices, language.graph.n, task.region_overlap_rows
+        ) < 1:
+            raise RuntimeError("cross-region test query has no cross-region segment")
+        if cross_region_direction(
+            sample.query_vertices, language.graph.n, task.region_overlap_rows
+        ) is None:
+            raise RuntimeError("cross-region test endpoints are not in opposite bands")
 
 
 def qa_pool_stats(pool: Sequence[QASample]) -> dict[str, Any]:
