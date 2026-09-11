@@ -127,6 +127,11 @@ python scripts/train.py configs/smoke.yaml --d-model 192 --n-layers 6 --n-heads 
 python scripts/evaluate.py outputs/smoke_micro/best.pt
 python scripts/evaluate.py outputs/smoke_micro/best.pt --n-samples 500 --cuts 0 20 50 --temperature 1.0
 
+# repeated-rollout transfer/confidence analysis for cross-region path-QA
+python scripts/analyze_cross_region.py outputs/path_qa_cross_region/best.pt \
+  --dataset ../data/outputs/path_qa_cross_region \
+  --n-queries 500 --rollouts-per-query 32
+
 # sample sentences and decode them with the exact decoder
 python scripts/generate.py outputs/smoke_micro/best.pt -n 5 --score
 python scripts/generate.py outputs/smoke_micro/best.pt -n 5 --cut 50 --temperature 0.8
@@ -141,6 +146,16 @@ as `query_bits + "_"`. It reports decodability, graph-walk validity, endpoints,
 waypoint order, per-segment simplicity, semantic success and exact-reference
 rates. Semantic success accepts any route satisfying the question, not only the
 stored reference route.
+
+For a dataset whose `task.split_mode` is `cross-region`,
+`analyze_cross_region.py` estimates a nested transfer funnel (`correct start ->`
+`enter overlap -> reach target region -> hit/end at destination`), stratifies it
+by direction, number of crossing segments, query length and Manhattan distance,
+and reports per-query endpoint entropy. It also measures teacher-forced token
+probability/entropy/margin at the two region gates, and performs a destination
+intervention by replacing a cross-region destination with a same-region one.
+The outputs are `cross_region_analysis.json` and
+`cross_region_queries.jsonl`.
 
 ---
 

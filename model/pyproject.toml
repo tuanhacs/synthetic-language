@@ -18,4 +18,4 @@ dependencies = ["torch>=2.1", "pyyaml>=6.0"]
 # evals.py, train.py); scripts/ add this directory to sys.path directly, so no
 # package install is required to use the CLIs.
 [tool.setuptools]
-py-modules = ["_paths", "config", "model", "data", "sample", "evals", "train"]
+py-modules = ["_paths", "config", "model", "data", "sample", "evals", "train", "cross_region"]
