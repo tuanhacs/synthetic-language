@@ -128,7 +128,11 @@ def train(cfg: Config, verbose: bool = True) -> dict:
     start_step = 0
     best_valid = float("inf")
     if should_resume:
-        checkpoint = torch.load(latest_path, map_location=device, weights_only=False)
+        # RNG states must remain CPU ByteTensors. Loading the whole checkpoint
+        # directly onto CUDA turns them into CUDA tensors, which
+        # torch.Generator.set_state()/torch.set_rng_state() reject. Model and
+        # optimizer load_state_dict calls below move their tensors as needed.
+        checkpoint = torch.load(latest_path, map_location="cpu", weights_only=False)
         _validate_resume_checkpoint(checkpoint, cfg, data)
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
@@ -338,9 +342,18 @@ def _rng_state() -> dict:
 
 def _restore_rng_state(state: dict) -> None:
     random.setstate(state["python"])
-    torch.set_rng_state(state["torch_cpu"])
+    torch.set_rng_state(_as_cpu_rng_state(state["torch_cpu"]))
     if torch.cuda.is_available() and "torch_cuda" in state:
-        torch.cuda.set_rng_state_all(state["torch_cuda"])
+        torch.cuda.set_rng_state_all(
+            [_as_cpu_rng_state(item) for item in state["torch_cuda"]]
+        )
+
+
+def _as_cpu_rng_state(state) -> torch.Tensor:
+    """Normalize legacy/device-mapped RNG state for PyTorch RNG APIs."""
+    if not isinstance(state, torch.Tensor):
+        state = torch.as_tensor(state, dtype=torch.uint8)
+    return state.detach().to(device="cpu", dtype=torch.uint8).contiguous()
 
 
 def _trim_metrics(path: Path, completed_step: int) -> None:

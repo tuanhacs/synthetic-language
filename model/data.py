@@ -164,7 +164,13 @@ class BatchSampler:
         return {"generator_state": self.generator.get_state()}
 
     def load_state_dict(self, state: dict) -> None:
-        self.generator.set_state(state["generator_state"])
+        generator_state = state["generator_state"]
+        if not isinstance(generator_state, torch.Tensor):
+            generator_state = torch.as_tensor(generator_state, dtype=torch.uint8)
+        generator_state = generator_state.detach().to(
+            device="cpu", dtype=torch.uint8
+        ).contiguous()
+        self.generator.set_state(generator_state)
 
     def batch(self, device: torch.device | str = "cpu") -> tuple[torch.Tensor, torch.Tensor]:
         idx = torch.randint(
