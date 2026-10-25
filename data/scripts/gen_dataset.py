@@ -139,7 +139,7 @@ def build(
         )
     else:
         worst_bits = cfg.data.walk_len[1] * max_word_len + 2
-    if worst_bits > cfg.data.context_len:
+    if cfg.data.context_len is not None and worst_bits > cfg.data.context_len:
         log(
             f"[warn] actual worst-case sentence length {worst_bits} bits exceeds "
             f"context_len {cfg.data.context_len}"
@@ -181,18 +181,37 @@ def build(
         splits = split_pool(pool, cfg.data.split, rng=rngs["split"])
     log(f"\npool: {len(pool)} unique examples, {sum(len(s.bits) for s in pool)} tokens")
     log(f"splits: {splits.sizes()} | bits {splits.total_bits()}")
+    qa_stats_by_split = None
     if cfg.task.type == "path-qa":
+        qa_stats_by_split = {
+            name: qa_pool_stats(split) for name, split in splits.items()
+        }
         log(
             "query pairs: "
             + str(
                 {
-                    name: qa_pool_stats(split)["query_pair_occurrences"]
-                    for name, split in splits.items()
+                    name: stats["query_pair_occurrences"]
+                    for name, stats in qa_stats_by_split.items()
                 }
             )
         )
+        observed_max = max(
+            stats["full_sequence_tokens"]["max"] or 0
+            for stats in qa_stats_by_split.values()
+        )
+        recommended_context = ((observed_max + 63) // 64) * 64
+        log("full sequence tokens (BOS + sample + EOS):")
+        for name, stats in qa_stats_by_split.items():
+            log(f"  {name:5s} {stats['full_sequence_tokens']}")
+        log(
+            f"observed max={observed_max}; recommended context_len="
+            f"{recommended_context} (rounded up to a multiple of 64)"
+        )
 
     extra: dict[str, object] = {}
+    if qa_stats_by_split is not None:
+        extra["observed_max_sequence_tokens"] = observed_max
+        extra["recommended_context_len"] = recommended_context
     if source_pool_path is not None:
         extra["codeword_pool_file"] = cfg.language.codeword_pool_file
         extra["source_codeword_pool_size"] = len(pool_code)
@@ -279,7 +298,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"  {name:5s} {stats['num_sentences']:7d} examples  "
                     f"{stats['total_bits']:9d} tokens  "
                     f"{stats['query_pair_occurrences']:9d} query pairs  answer "
-                    f"{stats['answer_bits']['min']}..{stats['answer_bits']['max']} bits"
+                    f"{stats['answer_bits']['min']}..{stats['answer_bits']['max']} bits  "
+                    f"full-seq max={stats['full_sequence_tokens']['max']} tokens"
                 )
             else:
                 print(

@@ -635,12 +635,20 @@ def qa_pool_stats(pool: Sequence[QASample]) -> dict[str, Any]:
                 "p95": None,
                 "max": None,
             },
+            "full_sequence_tokens": {
+                "min": None,
+                "mean": None,
+                "p95": None,
+                "p99": None,
+                "max": None,
+            },
         }
     query_lengths = [len(sample.query_bits) for sample in pool]
     answer_lengths = [len(sample.answer_bits) for sample in pool]
     cot_lengths = [sum(map(len, sample.cot_segments_bits)) for sample in pool]
     waypoint_counts = [len(sample.query_vertices) for sample in pool]
     answer_vertices = [len(sample.answer_walk) for sample in pool]
+    full_sequence_tokens = sorted(len(sample.bits) + 2 for sample in pool)
     directed_pairs = Counter(
         (u, v)
         for sample in pool
@@ -670,8 +678,21 @@ def qa_pool_stats(pool: Sequence[QASample]) -> dict[str, Any]:
         "unique_directed_query_pairs": len(directed_pairs),
         "unique_undirected_query_pairs": len(undirected_pairs),
         "directed_pair_frequency": pair_frequency_stats,
+        "full_sequence_tokens": {
+            "min": full_sequence_tokens[0],
+            "mean": sum(full_sequence_tokens) / len(full_sequence_tokens),
+            "p95": _nearest_rank(full_sequence_tokens, 95),
+            "p99": _nearest_rank(full_sequence_tokens, 99),
+            "max": full_sequence_tokens[-1],
+        },
     }
 
 
 def _range_stats(values: Sequence[int]) -> dict[str, float | int]:
     return {"min": min(values), "max": max(values), "mean": sum(values) / len(values)}
+
+
+def _nearest_rank(sorted_values: Sequence[int], percentile: int) -> int:
+    """Nearest-rank percentile for an already sorted, non-empty sequence."""
+    index = max(0, (percentile * len(sorted_values) + 99) // 100 - 1)
+    return sorted_values[index]

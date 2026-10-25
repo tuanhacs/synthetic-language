@@ -170,6 +170,19 @@ These fields are mutually exclusive. Both modes retain exact-sample
 deduplication by complete `sample.bits`. A pair-budget split may exceed its
 target by at most `query_len.max - 2`, because the last sample is kept whole.
 
+For path-QA, `context_len` may be derived from the generated dataset:
+
+```yaml
+data:
+  context_len: auto
+```
+
+The generator measures `BOS + query + separators + CoT + final answer + EOS`
+for every sample, reports its min/mean/p95/p99/max, and recommends the observed
+maximum rounded up to the nearest multiple of 64. The Modal path-QA launcher
+uses this recommendation automatically; it no longer needs a context-length
+CLI argument.
+
 For a paired directionality control, copy a config without changing its language
 or seed and set `data.reverse_walks: true`. The generator first samples the same
 walk and the same codeword at every step as the normal run, then reverses the

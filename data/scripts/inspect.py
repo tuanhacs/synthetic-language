@@ -93,7 +93,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"{stats['total_bits']:9d} chars  "
                 f"pairs={stats['query_pair_occurrences']} "
                 f"unique-directed={stats['unique_directed_query_pairs']} "
-                f"held-out queries={held}"
+                f"held-out queries={held} "
+                f"full-seq={stats['full_sequence_tokens']}"
             )
             print(
                 f"        directed pair frequency={stats['directed_pair_frequency']}"

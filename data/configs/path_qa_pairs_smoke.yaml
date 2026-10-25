@@ -11,7 +11,7 @@ data:
   split: [80, 10, 10]
   seed: 0
   noise: null
-  context_len: 1024
+  context_len: auto
 
 task:
   type: path-qa

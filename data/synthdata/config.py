@@ -151,7 +151,7 @@ class DataConfig:
     seed: int = 42
     reverse_walks: bool = False
     noise: NoiseConfig | None = None
-    context_len: int = 512  # training context; used for packing + length warnings
+    context_len: int | None = 512  # None means derive it from the generated pool
 
     def to_dict(self) -> dict[str, Any]:
         out = {
@@ -160,7 +160,7 @@ class DataConfig:
             "seed": self.seed,
             "reverse_walks": self.reverse_walks,
             "noise": self.noise.to_dict() if self.noise else None,
-            "context_len": self.context_len,
+            "context_len": self.context_len if self.context_len is not None else "auto",
         }
         if self.pool_tokens is not None:
             out["pool_tokens"] = self.pool_tokens
@@ -378,6 +378,12 @@ def parse_config(raw: dict[str, Any]) -> Config:
             "data.pool_tokens and data.pool_query_pairs are mutually exclusive"
         )
     use_pair_budget = "pool_query_pairs" in data_raw
+    raw_context_len = data_raw.get("context_len", 512)
+    context_len = (
+        None
+        if raw_context_len is None or str(raw_context_len).lower() == "auto"
+        else int(raw_context_len)
+    )
     data = DataConfig(
         walk_len=_pair(data_raw.get("walk_len", [8, 32]), "data.walk_len"),
         pool_tokens=(
@@ -390,7 +396,7 @@ def parse_config(raw: dict[str, Any]) -> Config:
         seed=int(data_raw.get("seed", 42)),
         reverse_walks=reverse_walks,
         noise=_noise_config(data_raw.get("noise")),
-        context_len=int(data_raw.get("context_len", 512)),
+        context_len=context_len,
     )
 
     cfg = Config(language=language, data=data, task=_task_config(raw.get("task")))
@@ -480,8 +486,10 @@ def validate_config(cfg: Config) -> list[str]:
             raise ConfigError("data.pool_query_pairs is only valid for task.type: path-qa")
     if sum(cfg.data.split) <= 0 or any(s < 0 for s in cfg.data.split):
         raise ConfigError("data.split must be non-negative with a positive sum")
-    if cfg.data.context_len < 8:
+    if cfg.data.context_len is not None and cfg.data.context_len < 8:
         raise ConfigError("data.context_len must be >= 8")
+    if cfg.data.context_len is None and cfg.task.type != "path-qa":
+        raise ConfigError("data.context_len: auto is currently only supported for path-QA")
 
     task = cfg.task
     if task.type == "path-qa":
@@ -575,7 +583,7 @@ def validate_config(cfg: Config) -> list[str]:
         if task.type == "path-qa"
         else f"walk_len max {whi} x codeword max {max_word_len} bits"
     )
-    if worst_bits > cfg.data.context_len:
+    if cfg.data.context_len is not None and worst_bits > cfg.data.context_len:
         warnings.append(
             f"worst-case sentence length {worst_bits} tokens ({worst_description}) "
             f"exceeds context_len {cfg.data.context_len}; "
