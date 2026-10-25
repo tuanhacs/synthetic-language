@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from collections import Counter
 from dataclasses import dataclass
 from typing import AbstractSet, Any, Sequence
 
@@ -515,9 +516,23 @@ def build_qa_splits(
     data: DataConfig,
     rng: random.Random,
     pool_tokens: int | None = None,
+    pool_query_pairs: int | None = None,
 ) -> Splits:
-    """Build IID, held-out-pair, or cross-region QA splits by token budget."""
-    budget = data.pool_tokens if pool_tokens is None else pool_tokens
+    """Build QA splits using exactly one token or query-pair budget."""
+    if pool_tokens is not None and pool_query_pairs is not None:
+        raise ValueError("pool token and query-pair overrides are mutually exclusive")
+    if pool_tokens is not None:
+        token_budget, pair_budget = pool_tokens, None
+    elif pool_query_pairs is not None:
+        token_budget, pair_budget = None, pool_query_pairs
+    else:
+        token_budget = data.pool_tokens
+        pair_budget = data.pool_query_pairs
+    if (token_budget is None) == (pair_budget is None):
+        raise ValueError("exactly one QA pool budget must be active")
+    budget = token_budget if token_budget is not None else pair_budget
+    assert budget is not None
+    use_pair_budget = pair_budget is not None
     weights = data.split
     total_weight = sum(weights)
     budgets = [int(budget * weight / total_weight) for weight in weights]
@@ -526,10 +541,10 @@ def build_qa_splits(
     seen: set[str] = set()
     for split_index, target in enumerate(budgets):
         items: list[QASample] = []
-        tokens = 0
+        progress = 0
         attempts = 0
         max_attempts = max(10_000, target * 100)
-        while tokens < target:
+        while progress < target:
             attempts += 1
             if attempts > max_attempts:
                 raise RuntimeError(
@@ -553,7 +568,11 @@ def build_qa_splits(
                 continue
             seen.add(sample.bits)
             items.append(sample)
-            tokens += len(sample.bits)
+            progress += (
+                len(sample.query_vertices) - 1
+                if use_pair_budget
+                else len(sample.bits)
+            )
         built.append(tuple(items))
     splits = Splits(train=built[0], valid=built[1], test=built[2])
     if task.split_mode == "cross-region":
@@ -603,12 +622,41 @@ def _certify_cross_region_splits(
 
 def qa_pool_stats(pool: Sequence[QASample]) -> dict[str, Any]:
     if not pool:
-        return {"num_sentences": 0, "total_bits": 0}
+        return {
+            "num_sentences": 0,
+            "total_bits": 0,
+            "query_pair_occurrences": 0,
+            "unique_directed_query_pairs": 0,
+            "unique_undirected_query_pairs": 0,
+            "directed_pair_frequency": {
+                "min": None,
+                "median": None,
+                "mean": None,
+                "p95": None,
+                "max": None,
+            },
+        }
     query_lengths = [len(sample.query_bits) for sample in pool]
     answer_lengths = [len(sample.answer_bits) for sample in pool]
     cot_lengths = [sum(map(len, sample.cot_segments_bits)) for sample in pool]
     waypoint_counts = [len(sample.query_vertices) for sample in pool]
     answer_vertices = [len(sample.answer_walk) for sample in pool]
+    directed_pairs = Counter(
+        (u, v)
+        for sample in pool
+        for u, v in zip(sample.query_vertices, sample.query_vertices[1:])
+    )
+    undirected_pairs = {
+        tuple(sorted(pair)) for pair in directed_pairs
+    }
+    pair_frequencies = sorted(directed_pairs.values())
+    pair_frequency_stats = {
+        "min": pair_frequencies[0],
+        "median": pair_frequencies[len(pair_frequencies) // 2],
+        "mean": sum(pair_frequencies) / len(pair_frequencies),
+        "p95": pair_frequencies[(95 * len(pair_frequencies) - 1) // 100],
+        "max": pair_frequencies[-1],
+    }
     return {
         "num_sentences": len(pool),
         "total_bits": sum(len(sample.bits) for sample in pool),
@@ -618,6 +666,10 @@ def qa_pool_stats(pool: Sequence[QASample]) -> dict[str, Any]:
         "cot_segments": _range_stats([len(sample.cot_segments_bits) for sample in pool]),
         "query_waypoints": _range_stats(waypoint_counts),
         "answer_vertices": _range_stats(answer_vertices),
+        "query_pair_occurrences": sum(directed_pairs.values()),
+        "unique_directed_query_pairs": len(directed_pairs),
+        "unique_undirected_query_pairs": len(undirected_pairs),
+        "directed_pair_frequency": pair_frequency_stats,
     }
 
 

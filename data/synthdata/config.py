@@ -145,7 +145,8 @@ class NoiseConfig:
 @dataclass(frozen=True)
 class DataConfig:
     walk_len: tuple[int, int] = (8, 32)
-    pool_tokens: int = 10_000_000
+    pool_tokens: int | None = 10_000_000
+    pool_query_pairs: int | None = None
     split: tuple[float, float, float] = (98.0, 1.0, 1.0)
     seed: int = 42
     reverse_walks: bool = False
@@ -153,15 +154,19 @@ class DataConfig:
     context_len: int = 512  # training context; used for packing + length warnings
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "walk_len": list(self.walk_len),
-            "pool_tokens": self.pool_tokens,
             "split": list(self.split),
             "seed": self.seed,
             "reverse_walks": self.reverse_walks,
             "noise": self.noise.to_dict() if self.noise else None,
             "context_len": self.context_len,
         }
+        if self.pool_tokens is not None:
+            out["pool_tokens"] = self.pool_tokens
+        if self.pool_query_pairs is not None:
+            out["pool_query_pairs"] = self.pool_query_pairs
+        return out
 
 
 @dataclass(frozen=True)
@@ -338,7 +343,8 @@ def parse_config(raw: dict[str, Any]) -> Config:
     if unknown:
         raise ConfigError(f"unknown language fields: {sorted(unknown)}")
     unknown = set(data_raw) - {
-        "walk_len", "pool_tokens", "split", "seed", "reverse_walks", "noise", "context_len"
+        "walk_len", "pool_tokens", "pool_query_pairs", "split", "seed",
+        "reverse_walks", "noise", "context_len"
     }
     if unknown:
         raise ConfigError(f"unknown data fields: {sorted(unknown)}")
@@ -367,9 +373,19 @@ def parse_config(raw: dict[str, Any]) -> Config:
     if not isinstance(reverse_walks, bool):
         raise ConfigError("data.reverse_walks must be true or false")
 
+    if "pool_tokens" in data_raw and "pool_query_pairs" in data_raw:
+        raise ConfigError(
+            "data.pool_tokens and data.pool_query_pairs are mutually exclusive"
+        )
+    use_pair_budget = "pool_query_pairs" in data_raw
     data = DataConfig(
         walk_len=_pair(data_raw.get("walk_len", [8, 32]), "data.walk_len"),
-        pool_tokens=int(data_raw.get("pool_tokens", 10_000_000)),
+        pool_tokens=(
+            None if use_pair_budget else int(data_raw.get("pool_tokens", 10_000_000))
+        ),
+        pool_query_pairs=(
+            int(data_raw["pool_query_pairs"]) if use_pair_budget else None
+        ),
         split=split_t,  # type: ignore[arg-type]
         seed=int(data_raw.get("seed", 42)),
         reverse_walks=reverse_walks,
@@ -451,8 +467,17 @@ def validate_config(cfg: Config) -> list[str]:
     wlo, whi = cfg.data.walk_len
     if wlo < 2:
         raise ConfigError("data.walk_len min must be >= 2 (a walk has at least 2 vertices)")
-    if cfg.data.pool_tokens < 1:
+    if (cfg.data.pool_tokens is None) == (cfg.data.pool_query_pairs is None):
+        raise ConfigError(
+            "exactly one of data.pool_tokens or data.pool_query_pairs is required"
+        )
+    if cfg.data.pool_tokens is not None and cfg.data.pool_tokens < 1:
         raise ConfigError("data.pool_tokens must be >= 1")
+    if cfg.data.pool_query_pairs is not None:
+        if cfg.data.pool_query_pairs < 1:
+            raise ConfigError("data.pool_query_pairs must be >= 1")
+        if cfg.task.type != "path-qa":
+            raise ConfigError("data.pool_query_pairs is only valid for task.type: path-qa")
     if sum(cfg.data.split) <= 0 or any(s < 0 for s in cfg.data.split):
         raise ConfigError("data.split must be non-negative with a positive sum")
     if cfg.data.context_len < 8:

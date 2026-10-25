@@ -156,6 +156,20 @@ data:
   context_len: 512               # training context: used for packing and length warnings.
 ```
 
+Path-QA also supports a semantic dataset budget. Specify exactly one of:
+
+```yaml
+data:
+  pool_tokens: 300_000_000       # encoded-bit budget
+# or
+data:
+  pool_query_pairs: 1_000_000    # sum of L-1 over accepted QA samples
+```
+
+These fields are mutually exclusive. Both modes retain exact-sample
+deduplication by complete `sample.bits`. A pair-budget split may exceed its
+target by at most `query_len.max - 2`, because the last sample is kept whole.
+
 For a paired directionality control, copy a config without changing its language
 or seed and set `data.reverse_walks: true`. The generator first samples the same
 walk and the same codeword at every step as the normal run, then reverses the
@@ -254,6 +268,7 @@ Useful flags:
 
 ```bash
 --pool-tokens 200000     # override data.pool_tokens for a quick run (config value is kept in the manifest)
+--pool-query-pairs 1000  # override data.pool_query_pairs for a quick QA run
 --entropy-samples 64     # held-out sentences used to measure the entropy floor (0 = skip)
 ```
 
@@ -371,8 +386,9 @@ tok = BitTokenizer()
 windows = list(tok.pack(ds.splits.train, context_len=512))
 ```
 
-**Frozen pool (default).** A deduplicated pool of `pool_tokens` bits, split disjointly at string
-level and frozen to disk with a config hash. For memorisation / generalisation studies. For
+**Frozen pool (default).** A deduplicated pool controlled by `pool_tokens`, or for
+path-QA by `pool_query_pairs`, split disjointly at string level and frozen to disk
+with a config hash. For memorisation / generalisation studies. For
 scaling in dataset size `D`, use **nested subsets** so that the small run's data is a prefix of
 the large run's:
 

@@ -54,6 +54,7 @@ def _resolve_input_file(raw_path: str, config_path: str | Path | None) -> Path:
 def build(
     cfg: Config,
     pool_tokens: int | None,
+    pool_query_pairs: int | None,
     entropy_samples: int,
     quiet: bool = False,
     config_path: str | Path | None = None,
@@ -161,10 +162,17 @@ def build(
 
     if cfg.task.type == "path-qa":
         splits = build_qa_splits(
-            language, cfg.task, cfg.data, rngs["pool"], pool_tokens=pool_tokens
+            language,
+            cfg.task,
+            cfg.data,
+            rngs["pool"],
+            pool_tokens=pool_tokens,
+            pool_query_pairs=pool_query_pairs,
         )
         pool = [sample for _, split in splits.items() for sample in split]
     else:
+        if pool_query_pairs is not None:
+            raise ValueError("--pool-query-pairs requires task.type: path-qa")
         pool = build_pool(language, cfg.data, rngs["pool"], pool_tokens=pool_tokens)
         if cfg.data.noise is not None:
             pool = apply_noise(pool, cfg.data.noise, rngs["noise"], language=language)
@@ -173,6 +181,16 @@ def build(
         splits = split_pool(pool, cfg.data.split, rng=rngs["split"])
     log(f"\npool: {len(pool)} unique examples, {sum(len(s.bits) for s in pool)} tokens")
     log(f"splits: {splits.sizes()} | bits {splits.total_bits()}")
+    if cfg.task.type == "path-qa":
+        log(
+            "query pairs: "
+            + str(
+                {
+                    name: qa_pool_stats(split)["query_pair_occurrences"]
+                    for name, split in splits.items()
+                }
+            )
+        )
 
     extra: dict[str, object] = {}
     if source_pool_path is not None:
@@ -193,11 +211,21 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("config", help="path to the YAML config")
     ap.add_argument("--out", required=True, help="output dataset directory")
-    ap.add_argument(
+    budget_group = ap.add_mutually_exclusive_group()
+    budget_group.add_argument(
         "--pool-tokens",
         type=int,
         default=None,
         help="override data.pool_tokens (for quick smoke runs; the config keeps its value)",
+    )
+    budget_group.add_argument(
+        "--pool-query-pairs",
+        type=int,
+        default=None,
+        help=(
+            "override data.pool_query_pairs for a quick QA run "
+            "(the config value is kept in the manifest)"
+        ),
     )
     ap.add_argument(
         "--entropy-samples",
@@ -215,15 +243,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  task:     {cfg.task.to_dict()}")
     if args.pool_tokens is not None:
         print(f"  [override] pool_tokens = {args.pool_tokens} (config value kept in the manifest)")
+    if args.pool_query_pairs is not None:
+        print(
+            f"  [override] pool_query_pairs = {args.pool_query_pairs} "
+            "(config value kept in the manifest)"
+        )
 
     language, splits, report, base, extra = build(
         cfg,
         args.pool_tokens,
+        args.pool_query_pairs,
         args.entropy_samples,
         config_path=args.config,
     )
     if args.pool_tokens is not None:
         extra["pool_tokens_override"] = args.pool_tokens
+    if args.pool_query_pairs is not None:
+        extra["pool_query_pairs_override"] = args.pool_query_pairs
 
     out = save_dataset(
         args.out,
@@ -241,7 +277,8 @@ def main(argv: list[str] | None = None) -> int:
             if cfg.task.type == "path-qa":
                 print(
                     f"  {name:5s} {stats['num_sentences']:7d} examples  "
-                    f"{stats['total_bits']:9d} tokens  answer "
+                    f"{stats['total_bits']:9d} tokens  "
+                    f"{stats['query_pair_occurrences']:9d} query pairs  answer "
                     f"{stats['answer_bits']['min']}..{stats['answer_bits']['max']} bits"
                 )
             else:

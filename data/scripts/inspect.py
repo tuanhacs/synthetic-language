@@ -90,7 +90,13 @@ def main(argv: list[str] | None = None) -> int:
             held = sum(query_contains_held_out(s.query_vertices, cfg.task) for s in split)
             print(
                 f"  {name:5s} {stats['num_sentences']:7d} examples  "
-                f"{stats['total_bits']:9d} chars  held-out queries={held}"
+                f"{stats['total_bits']:9d} chars  "
+                f"pairs={stats['query_pair_occurrences']} "
+                f"unique-directed={stats['unique_directed_query_pairs']} "
+                f"held-out queries={held}"
+            )
+            print(
+                f"        directed pair frequency={stats['directed_pair_frequency']}"
             )
             if cfg.task.split_mode == "cross-region":
                 layout = cross_region_layout(

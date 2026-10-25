@@ -1,0 +1,23 @@
+language:
+  graph: grid-6x6
+  codeword_pool_file: ../codeword_pools/hard_ud_codebook_200.json
+  code:
+    type: ud
+  k: [1, 2]
+  assignment: disjoint-random
+
+data:
+  pool_query_pairs: 1_000
+  split: [80, 10, 10]
+  seed: 0
+  noise: null
+  context_len: 1024
+
+task:
+  type: path-qa
+  cot_mode: segments
+  query_len: [2, 4]
+  segment_len: [2, 6]
+  path_trials: 1000
+  split_mode: iid
+  pair_direction: unordered

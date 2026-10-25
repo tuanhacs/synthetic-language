@@ -48,6 +48,8 @@ def build_pool(
     memorisation studies) and do not count towards the budget.
     """
     budget = data_cfg.pool_tokens if pool_tokens is None else pool_tokens
+    if budget is None:
+        raise ValueError("a pool token budget is required for non-QA datasets")
     pool: list[Sample] = []
     seen: set[str] = set()
     total = 0
