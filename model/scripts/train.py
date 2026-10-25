@@ -37,6 +37,13 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--checkpoint-every", type=positive_int, default=None)
+    ap.add_argument(
+        "--resume",
+        choices=("auto", "never", "require"),
+        default=None,
+        help="resume from out_dir/latest.pt (default comes from config)",
+    )
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--device", default=None, help="cuda | mps | cpu (default: auto-detect)")
     ap.add_argument("--size", default=None, help="override model.size preset")
@@ -53,6 +60,8 @@ def main() -> int:
             "batch_size": args.batch_size,
             "lr": args.lr,
             "seed": args.seed,
+            "checkpoint_every": args.checkpoint_every,
+            "resume": args.resume,
             "out_dir": args.out_dir,
             "device": args.device,
         }.items()

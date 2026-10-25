@@ -96,6 +96,8 @@ class TrainConfig:
     log_every: int = 50
     eval_every: int = 250
     eval_batches: int = 20  # batches per validation pass
+    checkpoint_every: int = 250  # full resumable latest.pt interval
+    resume: str = "auto"  # auto | never | require
     seed: int = 42
     out_dir: str = "outputs/run"
     device: str | None = None  # None = auto (cuda > mps > cpu)
@@ -223,6 +225,10 @@ def parse_config(raw: dict[str, Any], path: str | None = None) -> Config:
         eval=EvalConfig(**eval_raw),
         path=path,
     )
+    if cfg.train.checkpoint_every < 1:
+        raise ConfigError("train.checkpoint_every must be >= 1")
+    if cfg.train.resume not in ("auto", "never", "require"):
+        raise ConfigError("train.resume must be 'auto', 'never', or 'require'")
     return cfg
 
 

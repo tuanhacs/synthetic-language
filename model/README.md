@@ -101,6 +101,8 @@ train:
   log_every: 50
   eval_every: 250
   # eval_batches: 20     # validation batches per eval pass
+  checkpoint_every: 250 # atomic full-state latest.pt interval
+  resume: auto           # auto | never | require
   seed: 42
   out_dir: outputs/smoke_micro
   # device: null         # null = auto-detect (cuda > mps > cpu)
@@ -121,7 +123,7 @@ Unknown keys are hard errors — a typo never silently trains the wrong thing.
 ## 4. Commands
 
 ```bash
-# train (writes metrics.jsonl, best.pt, last.pt, train_summary.json into out_dir)
+# train (writes metrics.jsonl, best.pt, latest.pt, last.pt, train_summary.json)
 python scripts/train.py configs/smoke.yaml
 python scripts/train.py configs/smoke.yaml --size tiny --max-steps 5000 --out-dir outputs/smoke_tiny
 python scripts/train.py configs/smoke.yaml --d-model 192 --n-layers 6 --n-heads 6
@@ -140,9 +142,12 @@ python scripts/generate.py outputs/smoke_micro/best.pt -n 5 --score
 python scripts/generate.py outputs/smoke_micro/best.pt -n 5 --cut 50 --temperature 0.8
 ```
 
-A checkpoint stores `{model: state_dict, config: full run config, step,
-valid_bits_per_token}`, so `evaluate.py` / `generate.py` need nothing but the file
-(the dataset directory comes from the stored config, overridable with `--dataset`).
+`best.pt` and `last.pt` are inference checkpoints containing the model, config,
+step and validation score. `latest.pt` is written atomically every
+`train.checkpoint_every` steps and additionally stores optimizer state, Python/
+PyTorch/CUDA RNG state and the frozen-data sampler state. With `resume: auto`,
+restarting the same run continues from `latest.pt`; incompatible model, training,
+or dataset configuration is rejected instead of silently starting from mixed state.
 
 For a path-QA checkpoint, `evaluate.py` automatically supplies each test prompt
 as `query_bits + "_"`. It reports decodability, graph-walk validity, endpoints,
@@ -214,6 +219,7 @@ Outputs in `out_dir`:
 |---|---|
 | `metrics.jsonl` | one JSON record per logged step: `step, lr, train/valid bits per token, gap_to_floor, elapsed_s` |
 | `best.pt` | best checkpoint by validation loss |
+| `latest.pt` | atomic resumable state: model, optimizer, step, RNG and data sampler |
 | `last.pt` | final checkpoint |
 | `train_summary.json` | start/end losses, best valid, floor, gap, wall time |
 

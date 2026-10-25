@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import random
 import time
 from pathlib import Path
 
@@ -67,15 +69,14 @@ def make_optimizer(model, cfg) -> torch.optim.AdamW:
 def train(cfg: Config, verbose: bool = True) -> dict:
     """Train according to ``cfg``; returns a summary dict.
 
-    Writes ``metrics.jsonl``, ``best.pt`` and ``last.pt`` into ``train.out_dir``.
-    A checkpoint holds ``{model: state_dict, config: full config dict, step, ...}``.
+    Writes ``metrics.jsonl``, ``best.pt``, resumable ``latest.pt`` and ``last.pt``
+    into ``train.out_dir``.
     """
     seed_everything(cfg.train.seed)
     device = resolve_device(cfg.train.device)
     out_dir = cfg.resolved_out_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = out_dir / "metrics.jsonl"
-    metrics_path.write_text("", encoding="utf-8")
 
     data: PackedData = load_frozen(cfg.resolved_dataset_dir(), cfg.model.context_len)
     task_type = data.manifest.get("config", {}).get("task", {}).get(
@@ -90,6 +91,7 @@ def train(cfg: Config, verbose: bool = True) -> dict:
     use_amp = device.type == "cuda"
     amp_dtype = torch.bfloat16
 
+    sampler: BatchSampler | None = None
     if cfg.data.mode == "streaming":
         from synthdata.config import parse_config as parse_data_config
 
@@ -118,6 +120,33 @@ def train(cfg: Config, verbose: bool = True) -> dict:
         else None
     )
 
+    latest_path = out_dir / "latest.pt"
+    should_resume = cfg.train.resume in ("auto", "require") and latest_path.exists()
+    if cfg.train.resume == "require" and not latest_path.exists():
+        raise FileNotFoundError(f"resume required but checkpoint does not exist: {latest_path}")
+
+    start_step = 0
+    best_valid = float("inf")
+    if should_resume:
+        checkpoint = torch.load(latest_path, map_location=device, weights_only=False)
+        _validate_resume_checkpoint(checkpoint, cfg, data)
+        model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        start_step = int(checkpoint["step"])
+        best_valid = float(checkpoint.get("best_valid_bits_per_token", float("inf")))
+        if sampler is None:
+            raise ValueError(
+                "exact checkpoint resume is currently supported only for frozen data"
+            )
+        sampler_state = checkpoint.get("train_sampler")
+        if sampler_state is None:
+            raise ValueError("latest.pt has no frozen-data sampler state")
+        sampler.load_state_dict(sampler_state)
+        _restore_rng_state(checkpoint["rng_state"])
+        _trim_metrics(metrics_path, start_step)
+    else:
+        metrics_path.write_text("", encoding="utf-8")
+
     if verbose:
         if cfg.train.warmup >= cfg.train.max_steps:
             print(f"warning: warmup {cfg.train.warmup} >= max_steps {cfg.train.max_steps} "
@@ -129,14 +158,35 @@ def train(cfg: Config, verbose: bool = True) -> dict:
         print(f"              train windows: {n_train_windows}  tokens: {data.token_counts()}")
         print(f"entropy floor {floor if floor is None else f'{floor:.4f}'} bits/token")
         print(f"out_dir       {out_dir}")
+        if should_resume:
+            print(f"resume        {latest_path}  (completed step {start_step})")
+        else:
+            print(f"resume        no ({cfg.train.resume})")
 
-    best_valid = float("inf")
+    if start_step >= cfg.train.max_steps:
+        if verbose:
+            print(
+                f"training already complete at step {start_step}; "
+                "leaving checkpoints unchanged"
+            )
+        return {
+            "out_dir": str(out_dir),
+            "device": str(device),
+            "num_params": model.num_params(),
+            "steps": start_step,
+            "best_valid_bits_per_token": (
+                None if best_valid == float("inf") else best_valid
+            ),
+            "resumed_complete": True,
+            "history": [],
+        }
+
     history: list[dict] = []
     start_time = time.time()
     first_train_bits: float | None = None
     last_train_bits = float("nan")
 
-    for step in range(cfg.train.max_steps):
+    for step in range(start_step, cfg.train.max_steps):
         lr = lr_at(step, cfg.train)
         for group in optimizer.param_groups:
             group["lr"] = lr
@@ -205,6 +255,20 @@ def train(cfg: Config, verbose: bool = True) -> dict:
                 parts.append(f"{record['elapsed_s']:.0f}s")
                 print("  ".join(parts))
 
+        if (step + 1) % cfg.train.checkpoint_every == 0 or is_last:
+            save_training_checkpoint(
+                latest_path,
+                model,
+                optimizer,
+                cfg,
+                data,
+                step + 1,
+                best_valid,
+                sampler,
+            )
+            if verbose:
+                print(f"checkpoint    {latest_path}  (step {step + 1})", flush=True)
+
     save_checkpoint(out_dir / "last.pt", model, cfg, cfg.train.max_steps, best_valid)
 
     # Final sentence-aligned valid loss: the quantity directly comparable to the floor.
@@ -244,7 +308,7 @@ def train(cfg: Config, verbose: bool = True) -> dict:
 
 def save_checkpoint(path: Path, model, cfg: Config, step: int, valid_bits: float) -> None:
     """Checkpoint = state_dict + the full run config + step."""
-    torch.save(
+    _atomic_torch_save(
         {
             "model": model.state_dict(),
             "config": cfg.to_dict(),
@@ -253,6 +317,112 @@ def save_checkpoint(path: Path, model, cfg: Config, step: int, valid_bits: float
         },
         path,
     )
+
+
+def _atomic_torch_save(payload: dict, path: Path) -> None:
+    """Replace a checkpoint only after its temporary file was written fully."""
+    temporary = path.with_name(path.name + ".tmp")
+    torch.save(payload, temporary)
+    os.replace(temporary, path)
+
+
+def _rng_state() -> dict:
+    state = {
+        "python": random.getstate(),
+        "torch_cpu": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["torch_cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state: dict) -> None:
+    random.setstate(state["python"])
+    torch.set_rng_state(state["torch_cpu"])
+    if torch.cuda.is_available() and "torch_cuda" in state:
+        torch.cuda.set_rng_state_all(state["torch_cuda"])
+
+
+def _trim_metrics(path: Path, completed_step: int) -> None:
+    """Drop log records newer than the durable training checkpoint."""
+    if not path.exists():
+        path.touch()
+        return
+    kept: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if int(record.get("step", 0)) <= completed_step:
+            kept.append(json.dumps(record))
+    path.write_text("".join(line + "\n" for line in kept), encoding="utf-8")
+
+
+def _resume_signature(cfg: Config) -> dict:
+    """Fields that must stay fixed for an exact continuation."""
+    train = cfg.train
+    return {
+        "model": cfg.model.to_dict(),
+        "data_mode": cfg.data.mode,
+        "train": {
+            key: getattr(train, key)
+            for key in (
+                "max_steps",
+                "batch_size",
+                "lr",
+                "min_lr_frac",
+                "warmup",
+                "weight_decay",
+                "betas",
+                "grad_clip",
+                "seed",
+            )
+        },
+    }
+
+
+def save_training_checkpoint(
+    path: Path,
+    model,
+    optimizer,
+    cfg: Config,
+    data: PackedData,
+    step: int,
+    best_valid: float,
+    sampler: BatchSampler | None,
+) -> None:
+    """Write the complete state required to continue training."""
+    _atomic_torch_save(
+        {
+            "checkpoint_version": 1,
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "config": cfg.to_dict(),
+            "resume_signature": _resume_signature(cfg),
+            "dataset_config_hash": data.manifest.get("config_hash"),
+            "step": step,
+            "best_valid_bits_per_token": best_valid,
+            "train_sampler": None if sampler is None else sampler.state_dict(),
+            "rng_state": _rng_state(),
+        },
+        path,
+    )
+
+
+def _validate_resume_checkpoint(checkpoint: dict, cfg: Config, data: PackedData) -> None:
+    if checkpoint.get("checkpoint_version") != 1:
+        raise ValueError("latest.pt is not a supported resumable checkpoint")
+    if checkpoint.get("resume_signature") != _resume_signature(cfg):
+        raise ValueError(
+            "latest.pt is incompatible with the current model/training config; "
+            "use train.resume: never or a different out_dir"
+        )
+    expected_hash = data.manifest.get("config_hash")
+    if checkpoint.get("dataset_config_hash") != expected_hash:
+        raise ValueError(
+            "latest.pt belongs to a different dataset config hash: "
+            f"{checkpoint.get('dataset_config_hash')} != {expected_hash}"
+        )
 
 
 def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):

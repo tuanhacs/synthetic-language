@@ -159,6 +159,13 @@ class BatchSampler:
     def __len__(self) -> int:
         return self.windows.shape[0]
 
+    def state_dict(self) -> dict:
+        """State needed to draw exactly the same future frozen-data batches."""
+        return {"generator_state": self.generator.get_state()}
+
+    def load_state_dict(self, state: dict) -> None:
+        self.generator.set_state(state["generator_state"])
+
     def batch(self, device: torch.device | str = "cpu") -> tuple[torch.Tensor, torch.Tensor]:
         idx = torch.randint(
             0, self.windows.shape[0], (self.batch_size,), generator=self.generator
