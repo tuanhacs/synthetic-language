@@ -181,7 +181,9 @@ The generator measures `BOS + query + separators + CoT + final answer + EOS`
 for every sample, reports its min/mean/p95/p99/max, and recommends the observed
 maximum rounded up to the nearest multiple of 64. The Modal path-QA launcher
 uses this recommendation automatically; it no longer needs a context-length
-CLI argument.
+CLI argument. Its checkpoint directory includes the derived value (for example
+`..._ctx2688`), so an auto-context run cannot accidentally resume a checkpoint
+created earlier with a manually selected context length.
 
 For a paired directionality control, copy a config without changing its language
 or seed and set `data.reverse_walks: true`. The generator first samples the same
