@@ -40,6 +40,8 @@ from .qa import (
     is_piecewise_simple_answer,
     sample_qa,
     validate_qa_answer,
+    validate_segment_cot,
+    split_qa_completion,
     waypoints_in_order,
 )
 from .storage import load_dataset, save_dataset
@@ -91,6 +93,8 @@ __all__ = [
     "save_dataset",
     "sample_qa",
     "validate_qa_answer",
+    "validate_segment_cot",
+    "split_qa_completion",
     "waypoints_in_order",
     "is_piecewise_simple_answer",
     "split_pool",

@@ -88,17 +88,22 @@ The generator supports the original language-modeling task and a conditional
 path-QA task. In path-QA, the question is a sequence of waypoint vertices and
 the answer concatenates one simple graph path for every consecutive waypoint
 pair. Vertices may repeat across different segments; only each individual
-segment must be simple. The serialized training text is
-`query_bits_answer_bits`, with `_` as the sole separator and the same codebooks
-used on both sides.
+segment must be simple. By default the serialized training text is
+`query_bits_answer_bits`. With `cot_mode: segments`, it is
+`query_bits_segment_1_bits_..._segment_(L-1)_bits_answer_bits`: each rationale
+field is the simple route for one consecutive waypoint pair, and the final
+answer is their merge with duplicate boundary vertices removed. The exact same
+sampled surface codewords are reused between rationale fields and the final
+answer. `_` is the only separator; no extra token type is introduced.
 
 ```yaml
 task:
   type: path-qa
+  cot_mode: none                # none | segments
   query_len: [2, 4]
   segment_len: [2, 14]
   path_trials: 1000
-  split_mode: iid                # iid | held-out-pairs
+  split_mode: iid                # iid | held-out-pairs | cross-region
   pair_direction: unordered      # [u,v] and [v,u] are the same held-out pair
   held_out_pairs: []             # required in test, excluded from train/valid
 ```
@@ -281,7 +286,9 @@ Each record carries the full ground truth, so later analyses never need to re-de
 
 For path-QA, each JSONL record stores `query_bits`, `answer_bits`,
 `query_vertices`, `answer_walk`, `query_cuts`, `answer_cuts`, and
-`segment_cuts`. No textual QUESTION/ANSWER tokens are used.
+`segment_cuts`. Segment-CoT datasets additionally populate
+`cot_segments_bits`; older records without the field load as non-CoT samples.
+No textual QUESTION/ANSWER/COT tokens are used.
 
 Reload everything with:
 

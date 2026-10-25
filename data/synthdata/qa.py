@@ -22,10 +22,27 @@ class QASample:
     query_cuts: tuple[int, ...]
     answer_cuts: tuple[int, ...]
     segment_cuts: tuple[int, ...]
+    cot_segments_bits: tuple[str, ...] = ()
 
     @property
     def bits(self) -> str:
-        return f"{self.query_bits}_{self.answer_bits}"
+        if not self.cot_segments_bits:
+            return f"{self.query_bits}_{self.answer_bits}"
+        return "_".join(
+            (self.query_bits, *self.cot_segments_bits, self.answer_bits)
+        )
+
+    @property
+    def answer_start(self) -> int:
+        """Character offset of the final answer inside :attr:`bits`."""
+        if not self.cot_segments_bits:
+            return len(self.query_bits) + 1
+        return (
+            len(self.query_bits)
+            + sum(len(segment) for segment in self.cot_segments_bits)
+            + len(self.cot_segments_bits)
+            + 1
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -36,6 +53,7 @@ class QASample:
             "query_cuts": list(self.query_cuts),
             "answer_cuts": list(self.answer_cuts),
             "segment_cuts": list(self.segment_cuts),
+            "cot_segments_bits": list(self.cot_segments_bits),
         }
 
     @staticmethod
@@ -48,7 +66,104 @@ class QASample:
             query_cuts=tuple(int(v) for v in d["query_cuts"]),
             answer_cuts=tuple(int(v) for v in d["answer_cuts"]),
             segment_cuts=tuple(int(v) for v in d["segment_cuts"]),
+            cot_segments_bits=tuple(str(v) for v in d.get("cot_segments_bits", ())),
         )
+
+
+def split_qa_completion(
+    completion: str, query_len: int, cot_mode: str
+) -> dict[str, Any]:
+    """Split generated text after ``query_bits + '_'`` into CoT and final answer.
+
+    Segment CoT needs ``query_len - 1`` rationale fields followed by one final
+    answer field.  Malformed output is strict: it gets an empty final answer so
+    extra/missing separators cannot accidentally receive semantic credit.
+    """
+    if cot_mode == "none":
+        return {
+            "format_valid": "_" not in completion,
+            "cot_segments": (),
+            "final_answer": completion if "_" not in completion else "",
+        }
+    if cot_mode != "segments":
+        raise ValueError(f"unknown CoT mode: {cot_mode!r}")
+    parts = completion.split("_")
+    expected = query_len
+    valid = len(parts) == expected and all(parts)
+    return {
+        "format_valid": valid,
+        "cot_segments": tuple(parts[:-1]) if valid else (),
+        "final_answer": parts[-1] if valid else "",
+    }
+
+
+def validate_segment_cot(
+    language: Language,
+    cot_segments: Sequence[str],
+    query: Sequence[int],
+    final_walk: Sequence[int] = (),
+    final_bits: str | None = None,
+) -> dict[str, Any]:
+    """Validate segment rationale fields and their consistency with a final walk."""
+    expected = max(0, len(query) - 1)
+    count_ok = len(cot_segments) == expected
+    walks: list[tuple[int, ...]] = []
+    all_decodable = count_ok
+    all_valid = count_ok
+    endpoints = count_ok
+    all_simple = count_ok
+    for index, bits in enumerate(cot_segments):
+        decodable = language.is_decodable(bits)
+        decoded = language.decode(bits) if decodable else []
+        walk = tuple(decoded[0]) if decoded else ()
+        walks.append(walk)
+        all_decodable = all_decodable and decodable
+        all_valid = all_valid and bool(walk)
+        endpoints = endpoints and bool(
+            walk
+            and index < expected
+            and walk[0] == query[index]
+            and walk[-1] == query[index + 1]
+        )
+        all_simple = all_simple and bool(walk) and len(set(walk)) == len(walk)
+
+    merged: tuple[int, ...] = ()
+    if count_ok and walks and all(walks):
+        combined = list(walks[0])
+        for walk in walks[1:]:
+            combined.extend(walk[1:])
+        merged = tuple(combined)
+    merged_surface = ""
+    if merged and all_decodable:
+        surface_words = [
+            language.segment(bits, walk)
+            for bits, walk in zip(cot_segments, walks)
+        ]
+        if all(words is not None for words in surface_words):
+            merged_words = list(surface_words[0] or ())
+            for words in surface_words[1:]:
+                merged_words.extend((words or ())[1:])
+            merged_surface = "".join(merged_words)
+    walk_consistent = bool(merged and tuple(final_walk) == merged)
+    surface_consistent = bool(
+        walk_consistent
+        and final_bits is not None
+        and merged_surface == final_bits
+    )
+    success = bool(count_ok and all_decodable and all_valid and endpoints and all_simple)
+    return {
+        "segment_count_correct": count_ok,
+        "segments_decodable": bool(all_decodable),
+        "segments_valid_walk": bool(all_valid),
+        "segment_endpoints_correct": bool(endpoints),
+        "segments_simple": bool(all_simple),
+        "cot_success": success,
+        "cot_walks": tuple(walks),
+        "merged_walk": merged,
+        "merged_surface_bits": merged_surface,
+        "final_walk_consistent": walk_consistent,
+        "final_consistent": surface_consistent if final_bits is not None else walk_consistent,
+    }
 
 
 @dataclass(frozen=True)
@@ -367,6 +482,21 @@ def sample_qa(
         language, waypoints, rng, private_only=True
     )
     answer_bits, answer_cuts = _encode_vertices(language, answer, rng)
+    cot_segments_bits: tuple[str, ...] = ()
+    if task.cot_mode == "segments":
+        cot_parts: list[str] = []
+        previous_end = 0
+        for segment_end in segment_cuts:
+            # Every later segment repeats its boundary waypoint.  Reuse the
+            # exact surface codeword from the final answer so the final field is
+            # a literal merge of the rationale fields with duplicate boundaries
+            # removed.
+            start_vertex = 0 if previous_end == 0 else previous_end - 1
+            start_bit = 0 if start_vertex == 0 else answer_cuts[start_vertex - 1]
+            end_bit = answer_cuts[segment_end - 1]
+            cot_parts.append(answer_bits[start_bit:end_bit])
+            previous_end = segment_end
+        cot_segments_bits = tuple(cot_parts)
     return QASample(
         query_bits=query_bits,
         answer_bits=answer_bits,
@@ -375,6 +505,7 @@ def sample_qa(
         query_cuts=query_cuts,
         answer_cuts=answer_cuts,
         segment_cuts=tuple(segment_cuts),
+        cot_segments_bits=cot_segments_bits,
     )
 
 
@@ -475,6 +606,7 @@ def qa_pool_stats(pool: Sequence[QASample]) -> dict[str, Any]:
         return {"num_sentences": 0, "total_bits": 0}
     query_lengths = [len(sample.query_bits) for sample in pool]
     answer_lengths = [len(sample.answer_bits) for sample in pool]
+    cot_lengths = [sum(map(len, sample.cot_segments_bits)) for sample in pool]
     waypoint_counts = [len(sample.query_vertices) for sample in pool]
     answer_vertices = [len(sample.answer_walk) for sample in pool]
     return {
@@ -482,6 +614,8 @@ def qa_pool_stats(pool: Sequence[QASample]) -> dict[str, Any]:
         "total_bits": sum(len(sample.bits) for sample in pool),
         "query_bits": _range_stats(query_lengths),
         "answer_bits": _range_stats(answer_lengths),
+        "cot_bits": _range_stats(cot_lengths),
+        "cot_segments": _range_stats([len(sample.cot_segments_bits) for sample in pool]),
         "query_waypoints": _range_stats(waypoint_counts),
         "answer_vertices": _range_stats(answer_vertices),
     }

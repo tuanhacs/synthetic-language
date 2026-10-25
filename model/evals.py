@@ -32,6 +32,8 @@ from synthdata.qa import (
     QASample,
     cross_region_direction,
     cross_region_segment_count,
+    split_qa_completion,
+    validate_segment_cot,
     validate_qa_answer,
 )
 
@@ -245,6 +247,8 @@ def eval_path_qa(
         raise ValueError("path-QA evaluation needs a non-empty test split")
     selected = [test_samples[i % len(test_samples)] for i in range(n_samples)]
     prefixes = [sample.query_bits + "_" for sample in selected]
+    cot_mode = str((task_config or {}).get("cot_mode", "none"))
+    cot_enabled = cot_mode == "segments"
     generated = generate(
         model,
         tokenizer,
@@ -255,7 +259,9 @@ def eval_path_qa(
         device=device,
         rng=rng,
         batch_size=batch_size,
-        forbid_separator=True,
+        # In segment-CoT mode ``_`` is a real output token separating each
+        # pairwise route and the final merged answer.
+        forbid_separator=not cot_enabled,
     )
     limit = max_len or model.cfg.context_len
     counts = {
@@ -271,7 +277,19 @@ def eval_path_qa(
         "exact_reference_walk": 0,
         "terminated": 0,
     }
+    cot_counts = {
+        "format_valid": 0,
+        "segment_count_correct": 0,
+        "segments_decodable": 0,
+        "segments_valid_walk": 0,
+        "segment_endpoints_correct": 0,
+        "segments_simple": 0,
+        "cot_success": 0,
+        "final_consistent": 0,
+        "cot_and_semantic_success": 0,
+    }
     answers: list[str] = []
+    completions: list[str] = []
     examples: list[dict] = []
     answer_vertices = 0
     decoded_answers = 0
@@ -284,10 +302,38 @@ def eval_path_qa(
     for sample, prefix, full in zip(selected, prefixes, generated):
         if not full.startswith(prefix):
             raise RuntimeError("generator did not preserve the QA prompt")
-        answer = full[len(prefix) :]
+        completion = full[len(prefix) :]
+        parsed = split_qa_completion(completion, len(sample.query_vertices), cot_mode)
+        answer = parsed["final_answer"]
+        completions.append(completion)
         answers.append(answer)
         terminated = len(full) < limit - 1  # BOS is not present in returned text
         result = validate_qa_answer(language, answer, sample.query_vertices)
+        cot_result = validate_segment_cot(
+            language,
+            parsed["cot_segments"],
+            sample.query_vertices,
+            result["walk"],
+            answer,
+        )
+        if cot_enabled:
+            cot_counts["format_valid"] += int(parsed["format_valid"])
+            for key in (
+                "segment_count_correct",
+                "segments_decodable",
+                "segments_valid_walk",
+                "segment_endpoints_correct",
+                "segments_simple",
+                "cot_success",
+                "final_consistent",
+            ):
+                cot_counts[key] += int(parsed["format_valid"] and cot_result[key])
+            cot_counts["cot_and_semantic_success"] += int(
+                parsed["format_valid"]
+                and cot_result["cot_success"]
+                and cot_result["final_consistent"]
+                and result["semantic_success"]
+            )
         counts["answer_decodable"] += result["decodable"]
         for key in (
             "valid_walk", "correct_start", "correct_end", "waypoints_in_order",
@@ -327,10 +373,24 @@ def eval_path_qa(
                     "query_vertices": list(sample.query_vertices),
                     "query_bits": sample.query_bits,
                     "reference_walk": list(sample.answer_walk),
+                    "generated_completion": completion,
                     "generated_answer_bits": answer,
                     "decoded_walk": list(result["walk"]),
                     "terminated": terminated,
                     "semantic_success": result["semantic_success"],
+                    **(
+                        {
+                            "generated_cot_segments": list(parsed["cot_segments"]),
+                            "decoded_cot_walks": [
+                                list(walk) for walk in cot_result["cot_walks"]
+                            ],
+                            "cot_format_valid": parsed["format_valid"],
+                            "cot_success": cot_result["cot_success"],
+                            "final_consistent_with_cot": cot_result["final_consistent"],
+                        }
+                        if cot_enabled
+                        else {}
+                    ),
                     **(
                         {
                             "cross_segments": cross_segments,
@@ -345,13 +405,20 @@ def eval_path_qa(
     report = {
         "temperature": temperature,
         "n_samples": total,
+        "cot_mode": cot_mode,
         **{f"{key}_pct": 100.0 * value / total for key, value in counts.items()},
         "mean_generated_answer_bits": sum(map(len, answers)) / total,
+        "mean_generated_completion_chars": sum(map(len, completions)) / total,
         "mean_decoded_answer_vertices": (
             answer_vertices / decoded_answers if decoded_answers else None
         ),
         "examples": examples,
     }
+    if cot_enabled:
+        report["cot"] = {
+            f"{key}_pct": 100.0 * value / total
+            for key, value in cot_counts.items()
+        }
     if cross_enabled:
         def summarise(groups: dict) -> dict[str, dict[str, float | int]]:
             return {
@@ -495,6 +562,14 @@ def format_report(report: dict) -> str:
                 f"piecewise-simple {res['piecewise_simple_pct']:.1f}%  "
                 f"terminated {res['terminated_pct']:.1f}%"
             )
+            if "cot" in res:
+                cot = res["cot"]
+                lines.append(
+                    f"         CoT format {cot['format_valid_pct']:.1f}%  "
+                    f"segments {cot['cot_success_pct']:.1f}%  "
+                    f"final-consistent {cot['final_consistent_pct']:.1f}%  "
+                    f"CoT+semantic {cot['cot_and_semantic_success_pct']:.1f}%"
+                )
             if "cross_region" in res:
                 cross = res["cross_region"]
                 lines.append(

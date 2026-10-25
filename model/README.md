@@ -4,10 +4,13 @@ This package trains **decoder-only transformers** autoregressively on either the
 synthetic graph-walk language or its conditional path-QA task produced by
 [`../data`](../data/README.md), and scores generations with the exact decoder.
 
-Language modeling uses `BOS + bits + EOS`. Path-QA uses
-`BOS + query_bits + _ + answer_bits + EOS`, with loss masked through `_` so only
-answer bits and EOS are supervised. The graph, codebooks and segmentation never
-appear in the input. Research
+Language modeling uses `BOS + bits + EOS`. Standard path-QA uses
+`BOS + query_bits + _ + answer_bits + EOS`; segment-CoT path-QA uses
+`BOS + query_bits + _ + segment_1 + _ + ... + segment_(L-1) + _ + answer_bits + EOS`.
+Loss is masked only through the first `_`, so every CoT field, later separator,
+final answer, and EOS is supervised. The vocabulary remains
+`{0, 1, _, BOS, EOS, PAD}`. The graph, codebooks and segmentation never appear
+in the input. Research
 context and the full experiment plan: [`../docs/context.md`](../docs/context.md)
 (§7 model, §8 evaluation).
 
@@ -145,7 +148,9 @@ For a path-QA checkpoint, `evaluate.py` automatically supplies each test prompt
 as `query_bits + "_"`. It reports decodability, graph-walk validity, endpoints,
 waypoint order, per-segment simplicity, semantic success and exact-reference
 rates. Semantic success accepts any route satisfying the question, not only the
-stored reference route.
+stored reference route. For `cot_mode: segments`, it also reports output-format
+validity, per-segment route validity/endpoints/simplicity, and whether the final
+answer exactly represents the merge of the generated CoT routes.
 
 For a dataset whose `task.split_mode` is `cross-region`,
 `analyze_cross_region.py` estimates a nested transfer funnel (`correct start ->`
@@ -167,8 +172,8 @@ own packer) into windows of `context_len + 1` tokens, so a batch yields inputs
 are concatenated and *not* aligned to window boundaries, as in the CFG paper.
 `BatchSampler` draws uniform random windows from its own seeded `torch.Generator`.
 
-For path-QA, model inputs remain ordinary six-token IDs. Targets through `_` are
-ignored; answer tokens and answer EOS contribute to the loss. The target mask is
+For path-QA, model inputs remain ordinary six-token IDs. Targets through the
+first `_` are ignored; all later tokens and EOS contribute to the loss. The target mask is
 preserved even when packed windows cross example boundaries. Streaming mode is
 currently rejected for path-QA.
 

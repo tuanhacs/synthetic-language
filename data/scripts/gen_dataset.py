@@ -125,10 +125,15 @@ def build(
         max_waypoints = cfg.task.query_len[1]
         # Adjacent answer segments share their boundary waypoint.
         max_answer_vertices = 1 + (max_waypoints - 1) * (cfg.task.segment_len[1] - 1)
+        if cfg.task.cot_mode == "segments":
+            max_cot_vertices = (max_waypoints - 1) * cfg.task.segment_len[1]
+            separators = max_waypoints
+        else:
+            max_cot_vertices = 0
+            separators = 1
         worst_bits = (
-            max_waypoints * max_word_len
-            + 1  # '_'
-            + max_answer_vertices * max_word_len
+            (max_waypoints + max_cot_vertices + max_answer_vertices) * max_word_len
+            + separators
             + 2  # BOS/EOS
         )
     else:
@@ -206,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"config: {args.config}  hash={config_hash(cfg)}")
     print(f"  language: {cfg.language.to_dict()}")
     print(f"  data:     {cfg.data.to_dict()}")
+    if cfg.task.type == "path-qa":
+        print(f"  task:     {cfg.task.to_dict()}")
     if args.pool_tokens is not None:
         print(f"  [override] pool_tokens = {args.pool_tokens} (config value kept in the manifest)")
 

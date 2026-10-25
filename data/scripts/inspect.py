@@ -29,6 +29,7 @@ from synthdata.qa import (  # noqa: E402
     qa_pool_stats,
     query_contains_held_out,
     validate_qa_answer,
+    validate_segment_cot,
 )
 
 
@@ -133,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
             if split:
                 print(
                     f"        query bits={stats['query_bits']} waypoints={stats['query_waypoints']}\n"
+                    f"        CoT bits={stats['cot_bits']} segments={stats['cot_segments']}\n"
                     f"        answer bits={stats['answer_bits']} vertices={stats['answer_vertices']}"
                 )
 
@@ -157,6 +159,16 @@ def main(argv: list[str] | None = None) -> int:
                     "waypoints_in_order", "piecewise_simple", "semantic_success",
                 ):
                     counters[key] += int(result[key])
+                if cfg.task.cot_mode == "segments":
+                    cot = validate_segment_cot(
+                        lang,
+                        sample.cot_segments_bits,
+                        sample.query_vertices,
+                        result["walk"],
+                        sample.answer_bits,
+                    )
+                    counters["cot_success"] += int(cot["cot_success"])
+                    counters["cot_final_consistent"] += int(cot["final_consistent"])
             checked = min(args.validate, len(splits.test))
             for key, value in counters.items():
                 pct = 100.0 * value / checked if checked else 0.0

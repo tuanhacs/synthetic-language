@@ -21,6 +21,7 @@ NOISE_TYPES = ("bit-flip", "bit-delete", "vertex-noise")
 TASK_TYPES = ("language-modeling", "path-qa")
 QA_SPLIT_MODES = ("iid", "held-out-pairs", "cross-region")
 PAIR_DIRECTIONS = ("ordered", "unordered")
+COT_MODES = ("none", "segments")
 
 _GRAPH_RE = re.compile(r"^grid[-_ ]?(\d+)\s*x\s*(\d+)$", re.IGNORECASE)
 
@@ -175,6 +176,7 @@ class TaskConfig:
     pair_direction: str = "unordered"
     held_out_pairs: tuple[tuple[int, int], ...] = ()
     region_overlap_rows: int = 2
+    cot_mode: str = "none"
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": self.type}
@@ -187,6 +189,7 @@ class TaskConfig:
                 pair_direction=self.pair_direction,
                 held_out_pairs=[list(pair) for pair in self.held_out_pairs],
                 region_overlap_rows=self.region_overlap_rows,
+                cot_mode=self.cot_mode,
             )
         return out
 
@@ -280,7 +283,7 @@ def _task_config(raw: Any) -> TaskConfig:
         raise ConfigError("task must be a mapping")
     unknown = set(raw) - {
         "type", "query_len", "segment_len", "path_trials", "split_mode",
-        "pair_direction", "held_out_pairs", "region_overlap_rows",
+        "pair_direction", "held_out_pairs", "region_overlap_rows", "cot_mode",
     }
     if unknown:
         raise ConfigError(f"unknown task fields: {sorted(unknown)}")
@@ -302,6 +305,7 @@ def _task_config(raw: Any) -> TaskConfig:
         pair_direction=str(raw.get("pair_direction", "unordered")),
         held_out_pairs=pairs,
         region_overlap_rows=int(raw.get("region_overlap_rows", 2)),
+        cot_mode=str(raw.get("cot_mode", "none")),
     )
 
 
@@ -464,6 +468,10 @@ def validate_config(cfg: Config) -> list[str]:
             raise ConfigError(f"task.segment_len must lie in [2, |V|={n_v}]")
         if task.path_trials < 1:
             raise ConfigError("task.path_trials must be >= 1")
+        if task.cot_mode not in COT_MODES:
+            raise ConfigError(
+                f"task.cot_mode must be one of {COT_MODES}, got {task.cot_mode!r}"
+            )
         if task.split_mode not in QA_SPLIT_MODES:
             raise ConfigError(
                 f"task.split_mode must be one of {QA_SPLIT_MODES}, got {task.split_mode!r}"
@@ -522,14 +530,23 @@ def validate_config(cfg: Config) -> list[str]:
     if task.type == "path-qa":
         max_waypoints = task.query_len[1]
         max_answer_vertices = 1 + (max_waypoints - 1) * (task.segment_len[1] - 1)
+        if task.cot_mode == "segments":
+            max_cot_vertices = (max_waypoints - 1) * task.segment_len[1]
+            separators = max_waypoints
+        else:
+            max_cot_vertices = 0
+            separators = 1
         worst_bits = (
-            max_waypoints * max_word_len + 1
-            + max_answer_vertices * max_word_len + 2
+            (max_waypoints + max_cot_vertices + max_answer_vertices) * max_word_len
+            + separators
+            + 2
         )
     else:
         worst_bits = whi * max_word_len + 2
     worst_description = (
-        "max query plus piecewise-simple answer"
+        "max query plus segment CoT plus piecewise-simple answer"
+        if task.type == "path-qa" and task.cot_mode == "segments"
+        else "max query plus piecewise-simple answer"
         if task.type == "path-qa"
         else f"walk_len max {whi} x codeword max {max_word_len} bits"
     )

@@ -17,6 +17,8 @@ from synthdata.qa import (
     cross_region_direction,
     cross_region_layout,
     cross_region_segment_count,
+    split_qa_completion,
+    validate_segment_cot,
     validate_qa_answer,
 )
 
@@ -270,7 +272,9 @@ def _token_confidence(
                     if left == "overlap" and right == "target":
                         gate_indices.setdefault("exit_to_target", index)
 
-                answer_offset = len(sample.query_bits) + 2  # BOS + query + '_'
+                # Character offset is query + CoT fields + separators; add one
+                # for BOS to obtain the token position in the encoded sentence.
+                answer_offset = sample.answer_start + 1
                 for gate, vertex_index in gate_indices.items():
                     bit_start = 0 if vertex_index == 0 else sample.answer_cuts[vertex_index - 1]
                     bit_end = sample.answer_cuts[vertex_index]
@@ -338,6 +342,8 @@ def analyze_cross_region(
     if task.get("split_mode") != "cross-region":
         raise ValueError("cross-region analysis requires split_mode: cross-region")
     overlap_rows = int(task.get("region_overlap_rows", 2))
+    cot_mode = str(task.get("cot_mode", "none"))
+    cot_enabled = cot_mode == "segments"
     grid_n = data.language.graph.n
     candidates = list(data.test_samples)
     random.Random(seed).shuffle(candidates)
@@ -347,6 +353,8 @@ def analyze_cross_region(
 
     rng = torch.Generator(device="cpu").manual_seed(seed)
     overall = _new_accumulator()
+    cot_events: Counter = Counter()
+    cot_by_segment: dict[int, Counter] = defaultdict(Counter)
     grouped: dict[str, dict[str, dict[str, Any]]] = {
         name: defaultdict(_new_accumulator)
         for name in ("direction", "cross_segments", "query_length", "manhattan_distance")
@@ -378,7 +386,7 @@ def analyze_cross_region(
             device=device,
             rng=rng,
             batch_size=gen_batch_size,
-            forbid_separator=True,
+            forbid_separator=not cot_enabled,
         )
         for local_index, sample in enumerate(chunk):
             begin = local_index * rollouts_per_query
@@ -386,8 +394,48 @@ def analyze_cross_region(
             prompt = sample.query_bits + "_"
             query_acc = _new_accumulator()
             for full in completions:
-                answer = full[len(prompt) :]
+                completion = full[len(prompt) :]
+                parsed = split_qa_completion(
+                    completion, len(sample.query_vertices), cot_mode
+                )
+                answer = parsed["final_answer"]
                 terminated = len(full) < max_len - 1
+                if cot_enabled:
+                    final_result = validate_qa_answer(
+                        data.language, answer, sample.query_vertices
+                    )
+                    cot_result = validate_segment_cot(
+                        data.language,
+                        parsed["cot_segments"],
+                        sample.query_vertices,
+                        final_result["walk"],
+                        answer,
+                    )
+                    cot_events["n"] += 1
+                    cot_events["format_valid"] += int(parsed["format_valid"])
+                    for key in (
+                        "cot_success",
+                        "final_consistent",
+                    ):
+                        cot_events[key] += int(
+                            parsed["format_valid"] and cot_result[key]
+                        )
+                    for segment_index in range(len(sample.query_vertices) - 1):
+                        segment_bits = (
+                            parsed["cot_segments"][segment_index]
+                            if parsed["format_valid"]
+                            else ""
+                        )
+                        segment_result = validate_qa_answer(
+                            data.language,
+                            segment_bits,
+                            sample.query_vertices[segment_index : segment_index + 2],
+                        )
+                        segment_acc = cot_by_segment[segment_index]
+                        segment_acc["n"] += 1
+                        segment_acc["semantic_success"] += int(
+                            segment_result["semantic_success"]
+                        )
                 event = _walk_events(
                     data.language, sample, answer, terminated, overlap_rows
                 )
@@ -463,7 +511,7 @@ def analyze_cross_region(
             device=device,
             rng=rng,
             batch_size=gen_batch_size,
-            forbid_separator=True,
+            forbid_separator=not cot_enabled,
         )
         control_probs: list[float] = []
         for index, (original, prompt) in enumerate(control_meta):
@@ -474,7 +522,8 @@ def analyze_cross_region(
             for full in controls[
                 index * intervention_rollouts : (index + 1) * intervention_rollouts
             ]:
-                answer = full[len(prompt) :]
+                completion = full[len(prompt) :]
+                answer = split_qa_completion(completion, 2, cot_mode)["final_answer"]
                 decoded = data.language.decode(answer)
                 walk = decoded[0] if decoded else []
                 first_overlap = next(
@@ -528,6 +577,25 @@ def analyze_cross_region(
         "destination_intervention": intervention,
         "teacher_forced_token_confidence": confidence,
     }
+    if cot_enabled:
+        cot_n = cot_events["n"]
+        report["cot"] = {
+            "mode": cot_mode,
+            "format_valid_pct": 100.0 * cot_events["format_valid"] / cot_n,
+            "cot_success_pct": 100.0 * cot_events["cot_success"] / cot_n,
+            "final_consistent_pct": (
+                100.0 * cot_events["final_consistent"] / cot_n
+            ),
+            "by_segment_index": {
+                str(index): {
+                    "n": values["n"],
+                    "semantic_success_pct": (
+                        100.0 * values["semantic_success"] / values["n"]
+                    ),
+                }
+                for index, values in sorted(cot_by_segment.items())
+            },
+        }
     return report, query_records
 
 
