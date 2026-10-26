@@ -112,8 +112,17 @@ def load_codebook(dir_path: str | Path) -> tuple[GridGraph, Codebooks, tuple[int
     return graph, books, (walk_len[0], walk_len[1])
 
 
-def load_dataset(dir_path: str | Path, load_splits: bool = True) -> LoadedDataset:
-    """Rebuild ``(Config, Language, Splits)`` from a dataset directory."""
+def load_dataset(
+    dir_path: str | Path,
+    load_splits: bool = True,
+    split_names: Sequence[str] | None = None,
+) -> LoadedDataset:
+    """Rebuild a dataset, optionally reading only selected JSONL splits.
+
+    ``split_names`` keeps evaluation-only callers from parsing large train and
+    validation files they will never use. Existing callers still load all
+    splits by default.
+    """
     path = Path(dir_path)
     manifest = json.loads((path / MANIFEST).read_text(encoding="utf-8"))
     cfg = parse_config(manifest["config"])
@@ -121,10 +130,23 @@ def load_dataset(dir_path: str | Path, load_splits: bool = True) -> LoadedDatase
     language = Language(graph=graph, codebooks=books, walk_len=walk_len)
     if load_splits:
         qa = cfg.task.type == "path-qa"
+        requested = set(SPLIT_FILES) if split_names is None else set(split_names)
+        unknown = requested - set(SPLIT_FILES)
+        if unknown:
+            raise ValueError(f"unknown dataset splits: {sorted(unknown)}")
         splits = Splits(
-            train=_read_jsonl(path / SPLIT_FILES["train"], qa=qa),
-            valid=_read_jsonl(path / SPLIT_FILES["valid"], qa=qa),
-            test=_read_jsonl(path / SPLIT_FILES["test"], qa=qa),
+            train=(
+                _read_jsonl(path / SPLIT_FILES["train"], qa=qa)
+                if "train" in requested else ()
+            ),
+            valid=(
+                _read_jsonl(path / SPLIT_FILES["valid"], qa=qa)
+                if "valid" in requested else ()
+            ),
+            test=(
+                _read_jsonl(path / SPLIT_FILES["test"], qa=qa)
+                if "test" in requested else ()
+            ),
         )
     else:
         splits = Splits(train=(), valid=(), test=())

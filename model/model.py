@@ -16,7 +16,8 @@ import torch.nn.functional as F
 
 from config import ModelConfig
 
-KVCache = tuple[torch.Tensor, torch.Tensor]
+# Preallocated key/value storage plus the number of populated positions.
+KVCache = tuple[torch.Tensor, torch.Tensor, int]
 ModelCache = tuple[KVCache, ...]
 
 
@@ -59,6 +60,7 @@ class Attention(nn.Module):
         super().__init__()
         self.n_heads = cfg.n_heads
         self.head_dim = cfg.head_dim
+        self.max_seq_len = cfg.context_len
         self.dropout = cfg.dropout
         self.q_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
         self.k_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=False)
@@ -83,6 +85,7 @@ class Attention(nn.Module):
         cos: torch.Tensor,
         sin: torch.Tensor,
         cache: KVCache | None = None,
+        cache_capacity: int | None = None,
     ) -> tuple[torch.Tensor, KVCache]:
         """Attention with a generation-only KV cache.
 
@@ -101,14 +104,40 @@ class Attention(nn.Module):
         q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
 
         if cache is None:
+            capacity = self.max_seq_len if cache_capacity is None else cache_capacity
+            if capacity < t or capacity > self.max_seq_len:
+                raise ValueError(
+                    f"invalid KV cache capacity {capacity} for prefill length {t} "
+                    f"and context length {self.max_seq_len}"
+                )
+            key_storage = torch.empty(
+                (b, self.n_heads, capacity, self.head_dim),
+                dtype=k.dtype,
+                device=k.device,
+            )
+            value_storage = torch.empty_like(key_storage)
+            key_storage[:, :, :t].copy_(k)
+            value_storage[:, :, :t].copy_(v)
+            cache_len = t
             all_k, all_v = k, v
             is_causal = t > 1
         else:
-            past_k, past_v = cache
-            if past_k.shape[:2] != k.shape[:2] or past_k.shape[-1] != k.shape[-1]:
+            key_storage, value_storage, past_len = cache
+            if (
+                key_storage.shape != value_storage.shape
+                or key_storage.shape[0] != b
+                or key_storage.shape[1] != self.n_heads
+                or key_storage.shape[3] != self.head_dim
+                or key_storage.shape[2] > self.max_seq_len
+            ):
                 raise ValueError("KV cache shape does not match the current batch/model")
-            all_k = torch.cat((past_k, k), dim=2)
-            all_v = torch.cat((past_v, v), dim=2)
+            cache_len = past_len + t
+            if cache_len > key_storage.shape[2]:
+                raise ValueError("KV cache capacity exceeded")
+            key_storage[:, :, past_len:cache_len].copy_(k)
+            value_storage[:, :, past_len:cache_len].copy_(v)
+            all_k = key_storage[:, :, :cache_len]
+            all_v = value_storage[:, :, :cache_len]
             is_causal = False
 
         y = F.scaled_dot_product_attention(
@@ -119,7 +148,7 @@ class Attention(nn.Module):
             dropout_p=self.dropout if self.training else 0.0,
         )
         out = self.o_proj(y.transpose(1, 2).reshape(b, t, -1))
-        return out, (all_k, all_v)
+        return out, (key_storage, value_storage, cache_len)
 
 
 class SwiGLU(nn.Module):
@@ -152,8 +181,11 @@ class Block(nn.Module):
         cos: torch.Tensor,
         sin: torch.Tensor,
         cache: KVCache | None = None,
+        cache_capacity: int | None = None,
     ) -> tuple[torch.Tensor, KVCache]:
-        attn_out, new_cache = self.attn.forward_cached(self.attn_norm(x), cos, sin, cache)
+        attn_out, new_cache = self.attn.forward_cached(
+            self.attn_norm(x), cos, sin, cache, cache_capacity
+        )
         x = x + self.drop(attn_out)
         return x + self.drop(self.mlp(self.mlp_norm(x))), new_cache
 
@@ -203,6 +235,7 @@ class Model(nn.Module):
         self,
         idx: torch.Tensor,
         cache: ModelCache | None = None,
+        cache_capacity: int | None = None,
     ) -> tuple[torch.Tensor, ModelCache]:
         """Generation forward returning logits and reusable per-layer K/V.
 
@@ -219,11 +252,13 @@ class Model(nn.Module):
                 f"KV cache has {len(cache)} layers, model has {len(self.blocks)}"
             )
 
-        past_len = 0 if cache is None else cache[0][0].shape[2]
+        past_len = 0 if cache is None else cache[0][2]
         if cache is not None:
+            if cache_capacity is not None:
+                raise ValueError("cache_capacity is only valid for the prefill call")
             if t != 1:
                 raise ValueError("a populated KV cache accepts one new token")
-            if any(layer_cache[0].shape[2] != past_len for layer_cache in cache):
+            if any(layer_cache[2] != past_len for layer_cache in cache):
                 raise ValueError("all KV-cache layers must have the same sequence length")
         total_len = past_len + t
         if total_len > self.cfg.context_len:
@@ -237,7 +272,9 @@ class Model(nn.Module):
         new_cache: list[KVCache] = []
         for layer, block in enumerate(self.blocks):
             layer_cache = None if cache is None else cache[layer]
-            x, updated = block.forward_cached(x, cos, sin, layer_cache)
+            x, updated = block.forward_cached(
+                x, cos, sin, layer_cache, cache_capacity
+            )
             new_cache.append(updated)
         return self.lm_head(self.norm(x)), tuple(new_cache)
 

@@ -139,6 +139,59 @@ def load_frozen(dataset_dir: str | Path, context_len: int) -> PackedData:
     )
 
 
+def load_frozen_test_only(dataset_dir: str | Path, context_len: int) -> PackedData:
+    """Load language metadata and test samples without packing any split.
+
+    Path-QA success evaluation consumes raw test samples only. Avoiding train /
+    valid JSON parsing and fixed-window packing saves substantial startup time
+    and RAM for large frozen pools.
+    """
+    path = Path(dataset_dir)
+    ds = load_dataset(path, split_names=("test",))
+    qa = ds.config.task.type == "path-qa"
+    tok = BitTokenizer(include_separator=qa)
+    empty = torch.zeros((0, context_len + 1), dtype=torch.long)
+    return PackedData(
+        dataset_dir=path,
+        language=ds.language,
+        tokenizer=tok,
+        train=empty,
+        valid=empty,
+        test=empty,
+        train_samples=(),
+        valid_samples=(),
+        test_samples=ds.splits.test,
+        manifest=ds.manifest,
+        context_len=context_len,
+    )
+
+
+def load_frozen_train_valid(dataset_dir: str | Path, context_len: int) -> PackedData:
+    """Load and pack only the splits required by the training loop."""
+    path = Path(dataset_dir)
+    ds = load_dataset(path, split_names=("train", "valid"))
+    qa = ds.config.task.type == "path-qa"
+    tok = BitTokenizer(include_separator=qa)
+    empty = torch.zeros((0, context_len + 1), dtype=torch.long)
+    try:
+        valid = pack_windows(ds.splits.valid, context_len, tok)
+    except ValueError:
+        valid = empty
+    return PackedData(
+        dataset_dir=path,
+        language=ds.language,
+        tokenizer=tok,
+        train=pack_windows(ds.splits.train, context_len, tok),
+        valid=valid,
+        test=empty,
+        train_samples=ds.splits.train,
+        valid_samples=ds.splits.valid,
+        test_samples=(),
+        manifest=ds.manifest,
+        context_len=context_len,
+    )
+
+
 class BatchSampler:
     """Random-batch sampler over packed windows, with its own seeded generator."""
 

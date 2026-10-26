@@ -120,7 +120,7 @@ def _generate_batch(
     ids = torch.tensor(seqs, dtype=torch.long, device=device)
     done = torch.zeros(b, dtype=torch.bool, device=device)
     generated: list[list[int]] = [[] for _ in range(b)]
-    logits, cache = model.forward_cached(ids)
+    logits, cache = model.forward_cached(ids, cache_capacity=max_len)
 
     for step in range(max_len - width):
         last = logits[:, -1, :].float() / temperature

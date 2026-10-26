@@ -1,19 +1,8 @@
-"""Evaluations (context.md §8, v1 scope).
+"""Generation-success evaluations scored against exact ground truth.
 
-Three instruments, all scored against exact ground truth:
-
-* **validity** — free generation (``cut = 0``) and prefix completion (``cut = k``),
-  multinomial sampling at temperature ``tau``, scored with ``Language.is_valid``
-  (the exact DP decoder, the same instrument for every regime);
-* **loss vs entropy floor** — valid/test cross-entropy in bits/token and the gap to
-  the Bayes-optimal floor recorded in the dataset manifest;
-* **diversity / memorisation** — distinct-sentence fraction and the fraction of
-  generated sentences that appear verbatim in the training split.
-
-Losses are computed **sentence-aligned** (``BOS + bits + EOS``, PAD-filled, BOS/PAD
-targets masked out) so the token accounting is exactly the one the entropy floor is
-defined over: every ``bits`` token plus the final EOS, no BOS, no cross-sentence
-truncation.
+The evaluation CLI intentionally skips valid/test cross-entropy and entropy-gap
+passes. It loads raw test examples only, generates answers, and applies the exact
+language or path-QA validators.
 """
 
 from __future__ import annotations
@@ -38,7 +27,7 @@ from synthdata.qa import (
 )
 
 from config import EvalConfig
-from data import IGNORE_INDEX, PackedData, sentence_batches
+from data import IGNORE_INDEX, PackedData
 from model import Model
 from sample import generate
 
@@ -82,31 +71,6 @@ def bits_per_token(
     if count == 0:
         return float("nan")
     return total / count / LN2
-
-
-def eval_loss(
-    model: Model,
-    data: PackedData,
-    splits: Sequence[str] = ("valid", "test"),
-    batch_size: int = 32,
-    device: torch.device | str = "cpu",
-) -> dict:
-    """Sentence-aligned loss in bits/token per split, plus the gap to the floor."""
-    floor = data.entropy_floor
-    out: dict = {"entropy_floor_bits_per_token": floor, "splits": {}}
-    for name in splits:
-        samples = data.samples(name)
-        if not samples:
-            continue
-        loss = bits_per_token(
-            model, sentence_batches(samples, batch_size, data.tokenizer), device
-        )
-        out["splits"][name] = {
-            "num_sentences": len(samples),
-            "bits_per_token": loss,
-            "gap_to_floor": None if floor is None else loss - floor,
-        }
-    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -470,7 +434,6 @@ def run_all(
         "model": model.cfg.to_dict(),
         "num_params": model.num_params(),
         "eval": eval_cfg.to_dict(),
-        "loss": eval_loss(model, data, device=device),
         "generation": {},
     }
     if extra:
@@ -537,15 +500,6 @@ def format_report(report: dict) -> str:
     lines = []
     lines.append(f"dataset      {report['dataset_dir']}  ({report.get('regime')})")
     lines.append(f"model        {report['model']['size'] or 'custom'}  {report['num_params']:,} params")
-    floor = report["loss"]["entropy_floor_bits_per_token"]
-    lines.append(f"entropy floor {floor:.4f} bits/token" if floor else "entropy floor unknown")
-    for name, res in report["loss"]["splits"].items():
-        gap = res["gap_to_floor"]
-        gap_s = "n/a" if gap is None else f"{gap:+.4f}"
-        lines.append(
-            f"  {name:<5} loss {res['bits_per_token']:.4f} bits/token   gap {gap_s}"
-            f"   ({res['num_sentences']} sentences)"
-        )
     for key, res in report["generation"].items():
         if key == "path_qa":
             lines.append(

@@ -1,5 +1,26 @@
 .history
 __pycache__
+.pytest_cache/
+*.py[cod]
+
+# Local environments and editor metadata
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Training checkpoints and temporary writes. Checkpoints already tracked in
+# historical smoke fixtures remain tracked; this prevents adding new ones.
+*.pt
+*.pth
+*.ckpt
+*.tmp
+
+# Large runtime experiment artifacts produced by the Modal/data launchers
+/data/outputs/runtime_*/
+/model/outputs/path_qa_*/
+/model/outputs/runtime_*/
+
 app.py
 prefix_suffix.py
 push.sh

@@ -26,7 +26,7 @@ are attributable to `(N params, D tokens, language difficulty)` and nothing else
 * **SwiGLU** MLP, hidden width `4 * d_model` (gate style: three matrices)
 * **no biases** anywhere
 * **weight tying**: `lm_head.weight is embed.weight`
-* no GQA or MoE; generation uses a per-layer KV cache
+* no GQA or MoE; generation uses a preallocated per-layer KV cache
 
 Vocabulary is 5 tokens for language modeling and adds `_` for 6 tokens in
 path-QA, taken from `synthdata`'s `BitTokenizer`; `build_model` asserts the two agree. Because the vocabulary is so
@@ -123,12 +123,12 @@ Unknown keys are hard errors — a typo never silently trains the wrong thing.
 ## 4. Commands
 
 ```bash
-# train (writes metrics.jsonl, best.pt, latest.pt, last.pt, train_summary.json)
+# train (writes metrics.jsonl, best.pt, latest.pt, train_summary.json)
 python scripts/train.py configs/smoke.yaml
 python scripts/train.py configs/smoke.yaml --size tiny --max-steps 5000 --out-dir outputs/smoke_tiny
 python scripts/train.py configs/smoke.yaml --d-model 192 --n-layers 6 --n-heads 6
 
-# evaluate a checkpoint: loss vs floor, validity at each cut, diversity/memorisation
+# evaluate a checkpoint: generation success on test examples only
 python scripts/evaluate.py outputs/smoke_micro/best.pt
 python scripts/evaluate.py outputs/smoke_micro/best.pt --n-samples 500 --cuts 0 20 50 --temperature 1.0
 
@@ -142,8 +142,8 @@ python scripts/generate.py outputs/smoke_micro/best.pt -n 5 --score
 python scripts/generate.py outputs/smoke_micro/best.pt -n 5 --cut 50 --temperature 0.8
 ```
 
-`best.pt` and `last.pt` are inference checkpoints containing the model, config,
-step and validation score. `latest.pt` is written atomically every
+`best.pt` is the validation-selected inference checkpoint containing the model,
+config, step and validation score. `latest.pt` is written atomically every
 `train.checkpoint_every` steps and additionally stores optimizer state, Python/
 PyTorch/CUDA RNG state and the frozen-data sampler state. With `resume: auto`,
 restarting the same run continues from `latest.pt`; incompatible model, training,
@@ -207,28 +207,24 @@ to `min_lr_frac * lr` (10 %). Gradient clipping at 1.0.
 Device auto-detection **cuda > mps > cpu**. AMP (bf16) is enabled on cuda only; mps
 and cpu run fp32 — deliberately simple and robust rather than fast.
 
-Loss is always reported in **bits/token** (nats / ln 2) next to the dataset's
-`entropy_floor_bits_per_token` from the manifest and the gap between them. During
-training, validation uses packed windows (fast); at the end, `train_summary.json`
-also records a **sentence-aligned** valid loss (whole sentences, PAD-filled), which is
-the number to quote against the floor and the one `evaluate.py` reports.
+Training loss and periodic validation loss are reported in **bits/token**
+(nats / ln 2). Validation uses a configured number of packed-window batches and
+selects `best.pt`; training does not run an extra full-validation sweep at the end.
+`evaluate.py` does not recompute valid/test loss or an entropy gap.
 
 Outputs in `out_dir`:
 
 | file | content |
 |---|---|
-| `metrics.jsonl` | one JSON record per logged step: `step, lr, train/valid bits per token, gap_to_floor, elapsed_s` |
+| `metrics.jsonl` | one JSON record per logged step: `step, lr, train/valid bits per token, elapsed_s` |
 | `best.pt` | best checkpoint by validation loss |
 | `latest.pt` | atomic resumable state: model, optimizer, step, RNG and data sampler |
-| `last.pt` | final checkpoint |
-| `train_summary.json` | start/end losses, best valid, floor, gap, wall time |
+| `train_summary.json` | start/end losses, best/last periodic valid loss, floor, wall time |
 
 ---
 
 ## 7. Evaluation (`evals.py`, context.md §8 v1 scope)
 
-* `eval_loss` — valid/test loss in bits/token, sentence-aligned, plus the gap to the
-  entropy floor.
 * `eval_validity(cut=k)` — `cut=0` generates from `BOS`; `cut=k` takes fresh **test**
   sentences (never trained on), feeds their first `k` bits and lets the model finish.
   Multinomial sampling at temperature τ, `PAD`/`BOS` masked out of the distribution.

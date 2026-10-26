@@ -26,10 +26,9 @@ from data import (
     BatchSampler,
     IGNORE_INDEX,
     PackedData,
-    load_frozen,
+    load_frozen_train_valid,
     resolve_device,
     seed_everything,
-    sentence_batches,
     stream_batches,
 )
 from evals import LN2, bits_per_token
@@ -69,8 +68,8 @@ def make_optimizer(model, cfg) -> torch.optim.AdamW:
 def train(cfg: Config, verbose: bool = True) -> dict:
     """Train according to ``cfg``; returns a summary dict.
 
-    Writes ``metrics.jsonl``, ``best.pt``, resumable ``latest.pt`` and ``last.pt``
-    into ``train.out_dir``.
+    Writes ``metrics.jsonl``, validation-selected ``best.pt`` and resumable
+    ``latest.pt`` into ``train.out_dir``.
     """
     seed_everything(cfg.train.seed)
     device = resolve_device(cfg.train.device)
@@ -78,7 +77,9 @@ def train(cfg: Config, verbose: bool = True) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = out_dir / "metrics.jsonl"
 
-    data: PackedData = load_frozen(cfg.resolved_dataset_dir(), cfg.model.context_len)
+    data: PackedData = load_frozen_train_valid(
+        cfg.resolved_dataset_dir(), cfg.model.context_len
+    )
     task_type = data.manifest.get("config", {}).get("task", {}).get(
         "type", "language-modeling"
     )
@@ -189,6 +190,7 @@ def train(cfg: Config, verbose: bool = True) -> dict:
     start_time = time.time()
     first_train_bits: float | None = None
     last_train_bits = float("nan")
+    last_valid_bits: float | None = None
 
     for step in range(start_step, cfg.train.max_steps):
         lr = lr_at(step, cfg.train)
@@ -233,6 +235,7 @@ def train(cfg: Config, verbose: bool = True) -> dict:
                 valid_sampler.sequential_batches(cfg.train.eval_batches, device),
                 device,
             )
+            last_valid_bits = valid_bits
             if valid_bits < best_valid:
                 best_valid = valid_bits
                 save_checkpoint(out_dir / "best.pt", model, cfg, step + 1, valid_bits)
@@ -243,7 +246,6 @@ def train(cfg: Config, verbose: bool = True) -> dict:
                 "lr": lr,
                 "train_bits_per_token": train_bits,
                 "valid_bits_per_token": valid_bits,
-                "gap_to_floor": None if (floor is None or valid_bits is None) else valid_bits - floor,
                 "elapsed_s": time.time() - start_time,
             }
             history.append(record)
@@ -254,8 +256,6 @@ def train(cfg: Config, verbose: bool = True) -> dict:
                          f"train {train_bits:.4f} b/t"]
                 if valid_bits is not None:
                     parts.append(f"valid {valid_bits:.4f} b/t")
-                    if floor is not None:
-                        parts.append(f"gap {valid_bits - floor:+.4f}")
                 parts.append(f"{record['elapsed_s']:.0f}s")
                 print("  ".join(parts))
 
@@ -273,16 +273,6 @@ def train(cfg: Config, verbose: bool = True) -> dict:
             if verbose:
                 print(f"checkpoint    {latest_path}  (step {step + 1})", flush=True)
 
-    save_checkpoint(out_dir / "last.pt", model, cfg, cfg.train.max_steps, best_valid)
-
-    # Final sentence-aligned valid loss: the quantity directly comparable to the floor.
-    final_valid = (
-        bits_per_token(
-            model, sentence_batches(data.valid_samples, cfg.train.batch_size, data.tokenizer), device
-        )
-        if data.valid_samples
-        else None
-    )
     summary = {
         "out_dir": str(out_dir),
         "device": str(device),
@@ -291,9 +281,8 @@ def train(cfg: Config, verbose: bool = True) -> dict:
         "first_train_bits_per_token": first_train_bits,
         "last_train_bits_per_token": last_train_bits,
         "best_valid_bits_per_token": None if best_valid == float("inf") else best_valid,
-        "final_valid_bits_per_token_sentence_aligned": final_valid,
+        "final_valid_bits_per_token": last_valid_bits,
         "entropy_floor_bits_per_token": floor,
-        "gap_to_floor": None if (floor is None or final_valid is None) else final_valid - floor,
         "elapsed_s": time.time() - start_time,
         "history": history,
     }
@@ -302,11 +291,16 @@ def train(cfg: Config, verbose: bool = True) -> dict:
         encoding="utf-8",
     )
     if verbose:
-        print(
-            f"done in {summary['elapsed_s']:.0f}s  best valid {summary['best_valid_bits_per_token']:.4f} b/t"
-            f"  final valid (sentence-aligned) {final_valid:.4f} b/t"
-            + (f"  gap {summary['gap_to_floor']:+.4f}" if summary["gap_to_floor"] is not None else "")
-        )
+        parts = [
+            f"done in {summary['elapsed_s']:.0f}s",
+            f"best valid {summary['best_valid_bits_per_token']:.4f} b/t",
+        ]
+        if last_valid_bits is not None:
+            parts.append(
+                f"final valid ({cfg.train.eval_batches} batches) "
+                f"{last_valid_bits:.4f} b/t"
+            )
+        print("  ".join(parts))
     return summary
 
 

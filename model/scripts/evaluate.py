@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI: evaluate a checkpoint on a dataset (validity, loss vs floor, diversity).
+"""CLI: evaluate generation success from the dataset's test split only.
 
     python scripts/evaluate.py outputs/smoke_micro/best.pt
     python scripts/evaluate.py outputs/smoke_micro/best.pt --dataset ../data/outputs/smoke \
@@ -23,7 +23,7 @@ _HERE = str(Path(__file__).resolve().parent)
 sys.path[:] = [p for p in sys.path if p not in ("", ".", _HERE)]
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from data import load_frozen, resolve_device, seed_everything  # noqa: E402
+from data import load_frozen_test_only, resolve_device, seed_everything  # noqa: E402
 from evals import format_report, run_all  # noqa: E402
 from train import load_checkpoint  # noqa: E402
 
@@ -67,7 +67,7 @@ def main() -> int:
 
     dataset_dir = Path(args.dataset) if args.dataset else cfg.resolved_dataset_dir()
     seed_everything(eval_cfg.seed)
-    data = load_frozen(dataset_dir, cfg.model.context_len)
+    data = load_frozen_test_only(dataset_dir, cfg.model.context_len)
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(args.checkpoint).resolve().parent
     report = run_all(
