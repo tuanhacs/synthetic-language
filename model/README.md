@@ -249,9 +249,11 @@ temperature sweeps / mode-switch, scaling-law fits, probing.
 
 ## 8. Determinism
 
-`seed_everything(seed)` seeds Python's `random` and torch from `train.seed`;
+`seed_everything(seed)` seeds Python's `random` and every torch RNG;
 `BatchSampler` and generation carry their own `torch.Generator`, so batch order and
-sampling are reproducible independently of any global state. **MPS and CUDA kernels
-may still be nondeterministic**, so two runs on the same seed can differ slightly in
-the last digits — acceptable for research. The *data* side is bit-exactly
-reproducible from `(config, seed)`; the optimisation is not.
+sampling are reproducible independently of any global state. PyTorch deterministic
+algorithms are mandatory, cuDNN benchmarking and TF32 are disabled, and cuBLAS uses
+the deterministic `CUBLAS_WORKSPACE_CONFIG=:4096:8` workspace. An unsupported
+nondeterministic operation raises an error instead of silently weakening the
+guarantee. Reproduction still requires the same checkpoint/data, software stack,
+GPU architecture, batch size and other run parameters.

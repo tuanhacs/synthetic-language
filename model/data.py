@@ -23,6 +23,7 @@ comparable to the floor.
 
 from __future__ import annotations
 
+import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -298,6 +299,7 @@ def sentence_batches(
 
 def resolve_device(requested: str | None = None) -> torch.device:
     """Device auto-detection: cuda > mps > cpu."""
+    configure_determinism()
     if requested:
         return torch.device(requested)
     if torch.cuda.is_available():
@@ -307,12 +309,28 @@ def resolve_device(requested: str | None = None) -> torch.device:
     return torch.device("cpu")
 
 
-def seed_everything(seed: int) -> None:
-    """Seed python + torch RNGs.
+def configure_determinism() -> None:
+    """Require deterministic PyTorch kernels, including CUDA/cuBLAS kernels.
 
-    MPS and CUDA kernels may still be nondeterministic; that is acceptable here
-    (the *data* is bit-exactly reproducible, the optimisation is not).
+    ``CUBLAS_WORKSPACE_CONFIG`` must be installed before the first cuBLAS
+    operation. Every CLI resolves its device before moving a model to CUDA, so
+    putting the configuration here covers training, generation and evaluation.
+    Unsupported nondeterministic operations raise instead of silently running.
     """
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(True, warn_only=False)
+    torch.set_float32_matmul_precision("highest")
+    if getattr(torch.backends, "cudnn", None) is not None:
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.allow_tf32 = False
+    if getattr(torch.backends, "cuda", None) is not None:
+        torch.backends.cuda.matmul.allow_tf32 = False
+
+
+def seed_everything(seed: int) -> None:
+    """Configure deterministic kernels and seed Python plus every torch RNG."""
+    configure_determinism()
     random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
