@@ -22,44 +22,43 @@ Held-out-pairs experiments use unordered pairs. The pairs `{3,16}`, `{7,21}`, an
 
 ### IID
 
-| Code | Assignment | Query | Train pairs | Layers | Context | Temperature | Decodable | Success |
-|---|---|---|---:|---:|---:|---:|---:|---:|
-| UD | disjoint | 2–4 | 1.2M | 10 | 2200 | 1.0 | 98.7% | 87.1% |
-| suffix | disjoint | 2–4 | 1.2M | 10 | 2200 | 1.0 | 98.4% | 96.4% |
-| prefix | disjoint | 2–4 | 1.2M | 10 | 2200 | 1.0 | 99.9% | 98.8% |
-| UD | overlap | 2–6 | 2.4M | 10 | 3328 | 1.0 | 99.6% | 95.2% |
+| Code | Assignment | Query | Train pairs | Layers | Temperature | Decodable | Success |
+|---|---|---|---:|---:|---:|---:|---:|
+| UD | disjoint | 2–4 | 1.2M | 10 | 1.0 | 98.7% | 87.1% |
+| suffix | disjoint | 2–4 | 1.2M | 10 | 1.0 | 98.4% | 96.4% |
+| prefix | disjoint | 2–4 | 1.2M | 10 | 1.0 | 99.9% | 98.8% |
+| UD | overlap | 2–6 | 2.4M | 10 | 1.0 | 99.6% | 95.2% |
 
 ### Held-out pairs
 
-| Code | Assignment | Query | Train pairs | Layers | Context | Temperature | Decodable | Success |
-|---|---|---|---:|---:|---:|---:|---:|---:|
-| UD | disjoint | 2–4 | 1.2M | 10 | 2200 | 1.0 | 99.6% | 95.4% |
+| Code | Assignment | Query | Train pairs | Layers | Temperature | Decodable | Success |
+|---|---|---|---:|---:|---:|---:|---:|
+| UD | disjoint | 2–4 | 1.2M | 10 | 1.0 | 99.6% | 95.4% |
 
 ### Cross-region
 
-| Code | Assignment | Query | Train pairs | Layers | Context | Temperature | Decodable | Success |
-|---|---|---|---:|---:|---:|---:|---:|---:|
-| UD | disjoint | 2–4 | 1.6M | 10 | 2200 | 1.0 | 55.7% | 1.0% |
-| UD | overlap | 2–4 | 1.6M | 10 | 2200 | 1.0 | 70.5% | 8.8% |
-| UD | disjoint | 2–4 | 2.0M | 10 | 2112 | 1.0 | 84.5% | 27.9% |
-| UD | overlap | 2–4 | 2.0M | 10 | 2112 | 0.5 | 79.0% | 26.7% |
-| UD | overlap | 2–4 | 2.0M | 10 | 2112 | 1.0 | 77.2% | 25.7% |
-| UD | overlap | 2–4 | 2.0M | 10 | 2112 | 0.5 | 94.5% | 58.5% |
-| UD | overlap | 2–4 | 2.0M | 10 | 2112 | 1.0 | 92.9% | 55.5% |
-| UD | overlap | 2–4 | 2.0M | 12 | 2112 | 1.0 | 67.4% | 14.3% |
-| UD | overlap | 2–4 | 2.4M | 12 | 2112 | 0.5 | 57.0% | 5.3% |
-| UD | overlap | 2–4 | 2.4M | 12 | 2112 | 1.0 | 54.6% | 5.5% |
-| UD | overlap | 2–5 | 2.0M | 10 | 2688 | 1.0 | 50.7% | 1.0% |
-| UD | overlap | 2–5 | 2.4M | 10 | 2688 | 1.0 | 50.6% | 2.3% |
-| UD | overlap | 2–5 | 2.4M | 10 | 2688 | 1.0 | 41.6% | 4.8% |
-| UD | overlap | 2–6 | 2.4M | 10 | 3328 | 1.0 | 50.4% | 4.2% |
+| Code | Assignment | Query | Train pairs | Layers | Temperature | Decodable | Success |
+|---|---|---|---:|---:|---:|---:|---:|
+| UD | disjoint | 2–4 | 1.6M | 10 | 1.0 | 55.7% | 1.0% |
+| UD | overlap | 2–4 | 1.6M | 10 | 1.0 | 70.5% | 8.8% |
+| UD | disjoint | 2–4 | 2.0M | 10 | 1.0 | 84.5% | 27.9% |
+| UD | overlap | 2–4 | 2.0M | 10 | 0.5 | 79.0% | 26.7% |
+| UD | overlap | 2–4 | 2.0M | 10 | 1.0 | 77.2% | 25.7% |
+| UD | overlap | 2–4 | 2.0M | 10 | 0.5 | 94.5% | 58.5% |
+| UD | overlap | 2–4 | 2.0M | 10 | 1.0 | 92.9% | 55.5% |
+| UD | overlap | 2–4 | 2.0M | 12 | 1.0 | 67.4% | 14.3% |
+| UD | overlap | 2–4 | 2.4M | 12 | 0.5 | 57.0% | 5.3% |
+| UD | overlap | 2–4 | 2.4M | 12 | 1.0 | 54.6% | 5.5% |
+| UD | overlap | 2–5 | 2.0M | 10 | 1.0 | 50.7% | 1.0% |
+| UD | overlap | 2–5 | 2.4M | 10 | 1.0 | 50.6% | 2.3% |
+| UD | overlap | 2–5 | 2.4M | 10 | 1.0 | 41.6% | 4.8% |
+| UD | overlap | 2–6 | 2.4M | 10 | 1.0 | 50.4% | 4.2% |
 
 ## Without CoT
 
 ### Common settings
 
 - Model: `d512-L10-H8`
-- Context length: 1600
 - Temperature: 1.0
 - Evaluation samples: 1000
 
