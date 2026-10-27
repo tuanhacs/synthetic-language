@@ -27,3 +27,4 @@ push.sh
 app_path_qa_prefix_suffix.py
 app_path_qa_ud.py
 app_path_qa.py
+app_path_qa_evaluate.py
