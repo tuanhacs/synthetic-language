@@ -50,9 +50,9 @@ Held-out-pairs experiments use unordered pairs. The pairs `{3,16}`, `{7,21}`, an
 | UD | overlap | 2–4 | 2.4M | 12 | 2112 | 0.5 | 57.0% | 5.3% |
 | UD | overlap | 2–4 | 2.4M | 12 | 2112 | 1.0 | 54.6% | 5.5% |
 | UD | overlap | 2–5 | 2.0M | 10 | 2688 | 1.0 | 50.7% | 1.0% |
-| UD | overlap | 2–5 | 2.4M | 10 | — | 1.0 | 50.6% | 2.3% |
+| UD | overlap | 2–5 | 2.4M | 10 | 2688 | 1.0 | 50.6% | 2.3% |
 | UD | overlap | 2–5 | 2.4M | 10 | 2688 | 1.0 | 41.6% | 4.8% |
-| UD | overlap | 2–6 | 2.4M | 10 | — | 1.0 | 50.4% | 4.2% |
+| UD | overlap | 2–6 | 2.4M | 10 | 3328 | 1.0 | 50.4% | 4.2% |
 
 ## Without CoT
 
@@ -67,33 +67,33 @@ Held-out-pairs experiments use unordered pairs. The pairs `{3,16}`, `{7,21}`, an
 
 | Language | Assignment | Query | Train data | Decodable | Success |
 |---|---|---|---:|---:|---:|
-| Prefix | disjoint | 2–4 | 150M | 99.6% | 83.8% |
-| Prefix | disjoint | 2–4 | 200M | 99.9% | 96.8% |
-| Suffix | disjoint | 2–4 | 150M | 99.6% | 81.9% |
-| Suffix | disjoint | 2–4 | 200M | 99.8% | 91.3% |
-| UD | disjoint | 2–4 | 200M | 99.6% | 79.1% |
-| UD | overlap | 2–4 | 200M | 99.7% | 82.7% |
-| UD | overlap | 2–4 | 300M | 99.9% | 90.8% |
+| Prefix | disjoint | 2–4 | 1M | 99.6% | 83.8% |
+| Prefix | disjoint | 2–4 | 1.5M | 99.9% | 96.8% |
+| Suffix | disjoint | 2–4 | 1M | 99.6% | 81.9% |
+| Suffix | disjoint | 2–4 | 1.5M | 99.8% | 91.3% |
+| UD | disjoint | 2–4 | 600k | 99.6% | 79.1% |
+| UD | overlap | 2–4 | 600k | 99.7% | 82.7% |
+| UD | overlap | 2–4 | 900k | 99.9% | 90.8% |
 
 ### Held-out pairs
 
 | Language | Assignment | Query | Train data | Decodable | Success |
 |---|---|---|---:|---:|---:|
-| UD | disjoint | 2–4 | 300M | 100.0% | 92.7% |
-| UD | disjoint | 2–4 | 300M | 100.0% | 80.7% |
-| UD | disjoint | 2–5 | 400M | 100.0% | 79.4% |
+| UD | disjoint | 2–4 | 900k | 100.0% | 92.7% |
+| UD | disjoint | 2–4 | 900k | 100.0% | 80.7% |
+| UD | disjoint | 2–5 | 1.2M | 100.0% | 79.4% |
 
 ### Cross-region
 
 | Language | Assignment | Query | Train data | Decodable | Success |
 |---|---|---|---:|---:|---:|
-| UD | overlap | 2–4 | 300M | 99.2% | 16.1% |
-| UD | overlap | 2–4 | 400M | 99.3% | 23.4% |
-| UD | overlap | 2–4 | 500M | 98.6% | 35.9% |
-| UD | overlap | 2–5 | 800M | 99.8% | 22.7% |
-| UD | overlap | 2–6 | 1200M | 98.8% | 25.8% |
-| UD | disjoint | 2–4 | 300M | 96.8% | 18.7% |
-| UD | disjoint | 2–4 | 400M | 99.8% | 40.0% |
+| UD | overlap | 2–4 | 900k | 99.2% | 16.1% |
+| UD | overlap | 2–4 | 1.2M | 99.3% | 23.4% |
+| UD | overlap | 2–4 | 1.5M | 98.6% | 35.9% |
+| UD | overlap | 2–5 | 2.4M | 99.8% | 22.7% |
+| UD | overlap | 2–6 | 3.6M | 98.8% | 25.8% |
+| UD | disjoint | 2–4 | 900k | 96.8% | 18.7% |
+| UD | disjoint | 2–4 | 1.2M | 99.8% | 40.0% |
 
 ## Notes
 
