@@ -58,6 +58,7 @@ Held-out-pairs experiments use unordered pairs. The pairs `{3,16}`, `{7,21}`, an
 | UD | overlap | 2–6 | 2.4M | 10 | 1.0 | 50.4% | 4.2% |
 | prefix | overlap | 2–6 | 2.5M | 10 | 1.0 | 25.1% | 2.4% |
 | prefix | overlap | 2–6 | 3.0M | 10 | 1.0 | 31.7% | 4.1% |
+| prefix | overlap | 2–6 | 3.0M | 12 | 1.0 | 64.5% | 15.6% |
 
 ## Without CoT
 
