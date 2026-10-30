@@ -55,9 +55,26 @@ def main() -> int:
     ap.add_argument("--d-model", type=positive_int, default=None, help="override model width")
     ap.add_argument("--n-layers", type=positive_int, default=None, help="override layer count")
     ap.add_argument("--n-heads", type=positive_int, default=None, help="override attention head count")
+    ap.add_argument("--wandb", action="store_true", help="enable online W&B tracking")
+    ap.add_argument("--wandb-mode", choices=("disabled", "online", "offline"), default=None)
+    ap.add_argument("--wandb-project", default=None)
+    ap.add_argument("--wandb-entity", default=None)
+    ap.add_argument("--wandb-group", default=None)
+    ap.add_argument("--wandb-name", default=None)
+    ap.add_argument("--wandb-tags", nargs="+", default=None)
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    tracking_overrides = {
+        key: value for key, value in {
+            "mode": args.wandb_mode if args.wandb_mode is not None else ("online" if args.wandb else None),
+            "project": args.wandb_project, "entity": args.wandb_entity,
+            "group": args.wandb_group, "name": args.wandb_name,
+            "tags": tuple(args.wandb_tags) if args.wandb_tags is not None else None,
+        }.items() if value is not None
+    }
+    if tracking_overrides:
+        cfg = dataclasses.replace(cfg, wandb=dataclasses.replace(cfg.wandb, **tracking_overrides))
     overrides = {
         k: v
         for k, v in {

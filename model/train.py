@@ -34,6 +34,7 @@ from data import (
 )
 from evals import LN2, bits_per_token
 from model import build_model
+from tracking import RunTracker
 
 
 @dataclass
@@ -86,6 +87,19 @@ def make_optimizer(model, cfg) -> torch.optim.AdamW:
 
 
 def train(cfg: Config, verbose: bool = True) -> dict:
+    """Run step-based training with optional W&B metrics and failure cleanup."""
+    tracker = RunTracker(cfg, resume=cfg.train.resume != "never")
+    try:
+        result = _train(cfg, verbose, tracker)
+        tracker.summary({key: value for key, value in result.items() if key != "history"})
+        tracker.finish()
+        return result
+    except BaseException:
+        tracker.finish(exit_code=1)
+        raise
+
+
+def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
     """Train according to ``cfg``; returns a summary dict.
 
     Writes ``metrics.jsonl``, validation-selected ``best.pt`` and resumable
@@ -129,6 +143,7 @@ def train(cfg: Config, verbose: bool = True) -> dict:
         )
         next_train_batch = lambda: sampler.batch(device)  # noqa: E731
         n_train_windows = len(sampler)
+    tracker.dataset(data.manifest, model.num_params(), n_train_windows)
 
     valid_sampler = (
         BatchSampler(
@@ -289,6 +304,7 @@ def train(cfg: Config, verbose: bool = True) -> dict:
                 "early_stopping_bad_checks": early_stopping.bad_checks,
             }
             history.append(record)
+            tracker.log_training(record)
             with metrics_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record) + "\n")
             if verbose:

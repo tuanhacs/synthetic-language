@@ -700,3 +700,38 @@ split is not used to decide when to stop. `results.json` includes actual `steps`
 decodability/success. Use a new output root when changing batch/stopping settings;
 the same latent pool remains reusable. The cosine LR schedule still decays over
 the configured `max_steps` horizon.
+
+### Adding UD and W&B to the server sweep
+
+`--code-types prefix suffix ud` runs all three encodings; the default remains
+prefix/suffix for compatibility. UD imports `data/codeword_pools/hard_ud_codebook_200.json`
+by default; override it with `--ud-pool /absolute/path/to/another_pool.json`. The
+same prefix assignment template preserves per-vertex slots and overlap supports
+for suffix and UD. `--code-types ud` trains only UD, preparing one small prefix
+dataset solely as the assignment reference. Existing latent pools are reusable.
+
+For optional W&B tracking, install `wandb` and authenticate once with `wandb login`
+before starting an online sweep:
+
+```bash
+nohup env CUDA_VISIBLE_DEVICES=2 bash scripts/sweep_path_qa.sh \
+  --stage all --code-types prefix suffix ud \
+  --qa-mode iid --assignment disjoint --cot-mode none \
+  --latent-pool ./data/outputs/latent_iid_q2-4_seed0_3m \
+  --max-steps 100000 --batch-size 64 \
+  --eval-every 250 --early-stopping-patience 20 \
+  --early-stopping-min-delta 0.0001 \
+  --wandb --wandb-project synthetic-language --wandb-group iid-disjoint-none \
+  --output-root ./model/outputs/path_qa_sweeps/iid_disjoint_none_ud_wandb \
+  > sweep_iid_disjoint_none_ud_wandb.log 2>&1 < /dev/null &
+```
+
+With the default budgets this launches 24 sequential training/evaluation runs
+(8 sizes for each code type). Each size/code type has its own W&B run, grouped by
+`--wandb-group` (defaults to the output-root directory name); names are e.g.
+`ud_600000pairs`, and code type/task/assignment/CoT are attached as tags. Optional
+flags include `--wandb-entity`, `--wandb-tags` and `--wandb-mode offline`.
+Training/early-stopping curves and final test decodability/success are logged;
+local `results.json`, checkpoints, histograms and reports are still generated.
+Resume uses the saved W&B ID in each run directory. Do not put an API key on the
+command line; configure credentials in the server environment or via `wandb login`.

@@ -9,6 +9,9 @@ description = "Llama-style decoder-only transformers trained on the synthetic gr
 requires-python = ">=3.10"
 dependencies = ["torch>=2.1", "pyyaml>=6.0"]
 
+[project.optional-dependencies]
+tracking = ["wandb>=0.17"]
+
 # `synthdata` (the sibling ../data package) is deliberately NOT a dependency here:
 # _paths.py prepends ../data to sys.path when synthdata is not already importable,
 # so nothing needs installing. `pip install -e ../data` also works and takes
@@ -18,4 +21,4 @@ dependencies = ["torch>=2.1", "pyyaml>=6.0"]
 # evals.py, train.py); scripts/ add this directory to sys.path directly, so no
 # package install is required to use the CLIs.
 [tool.setuptools]
-py-modules = ["_paths", "config", "model", "data", "sample", "evals", "train", "cross_region"]
+py-modules = ["_paths", "config", "model", "data", "sample", "evals", "train", "cross_region", "tracking"]

@@ -16,6 +16,10 @@ venv/
 *.ckpt
 *.tmp
 
+# W&B local logs and per-output tracking identity
+wandb/
+wandb_run.json
+
 # Large runtime experiment artifacts produced by the Modal/data launchers
 /data/outputs/runtime_*/
 /model/outputs/path_qa_*/

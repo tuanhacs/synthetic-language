@@ -90,6 +90,49 @@ or an explicit fresh run. Existing default step-mode checkpoints remain compatib
 The cosine learning-rate schedule still uses `max_steps` as its horizon. Raising
 this limit therefore changes LR decay as well as the maximum training duration.
 
+### Optional Weights & Biases
+
+Install the extra once (`python -m pip install -e './model[tracking]'` from the
+repository root, or `python -m pip install wandb`), then run `wandb login` before
+starting an online job. Alternatively provide `WANDB_API_KEY` through the server
+environment. Keys are not included in configs or logs by this integration.
+
+```bash
+python model/scripts/train.py YOUR_MODEL_CONFIG.yaml \
+  --max-steps 100000 --early-stopping-patience 20 \
+  --wandb --wandb-project synthetic-language \
+  --wandb-group iid-disjoint --wandb-name ud-600k
+```
+
+YAML can set the optional top-level `wandb` block with `mode` (default `disabled`),
+`project`, `entity`, `name`, `group`, and a `tags` list. Tracking flags also accept
+`--wandb-mode offline` for a server without network access. Disabled mode neither
+imports the SDK nor creates a W&B run. Existing model configs/checkpoints without
+this block continue to load. The server requirements file includes the SDK, while
+the base model package keeps it optional.
+
+Training logs learning rate, train/validation bits per token, elapsed time and
+early-stopping patience counters at the existing logging/validation intervals.
+Run configuration records model dimensions, language/task, actual train query-pair
+count, per-split sizes and dataset fingerprint. No weight watching or model-artifact
+uploads are enabled. Training summaries report actual steps, best validation loss
+and stopping reason. A custom `trainer/step` axis uses optimizer steps rather than
+W&B's internal append counter.
+
+`wandb_run.json` in each checkpoint directory persists the run ID. Online restarts
+and the evaluation script reuse this ID, so train and test metrics belong to the
+same run. After a crash, steps after the last durable checkpoint may be logged
+again; local checkpoint/JSON records remain authoritative. Offline mode writes
+local W&B segments (cloud history resume is not supported offline); use `wandb sync`
+to upload them later. Explicit `train.resume: never` creates a new tracking ID.
+
+`model/scripts/evaluate.py` inherits tracking from the checkpoint, logging
+`test/decodable_pct`, `test/success_pct` and other scalar test metrics from
+the generated test report. Use `--wandb-mode disabled` on evaluation to opt out.
+Checkpoint weights themselves remain on the local filesystem. When adding tracking
+to a previously configured server sweep, select a new output root because runtime
+YAMLs are immutable once written.
+
 `synthdata` lives in the sibling `../data` folder and is **not** listed as a
 dependency. `_paths.py` contains a one-function **path shim**: if
 `synthdata` is not already importable, it prepends `<repo>/data` to `sys.path`. A

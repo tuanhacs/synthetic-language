@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from data import load_frozen_test_only, resolve_device, seed_everything  # noqa: E402
 from evals import format_report, run_all  # noqa: E402
 from train import load_checkpoint  # noqa: E402
+from tracking import log_evaluation  # noqa: E402
 
 
 def main() -> int:
@@ -45,10 +46,14 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--device", default=None)
+    ap.add_argument("--wandb-mode", choices=("disabled", "online", "offline"), default=None,
+                    help="override checkpoint tracking mode, e.g. disabled for local-only evaluation")
     args = ap.parse_args()
 
     device = resolve_device(args.device)
     model, cfg, ckpt = load_checkpoint(args.checkpoint, device)
+    if args.wandb_mode is not None:
+        cfg = dataclasses.replace(cfg, wandb=dataclasses.replace(cfg.wandb, mode=args.wandb_mode))
     model.eval()
 
     eval_overrides = {
@@ -82,6 +87,7 @@ def main() -> int:
     print(f"checkpoint   {args.checkpoint}  (step {ckpt.get('step')})")
     print(format_report(report))
     print(f"report       {report['report_path']}")
+    log_evaluation(dataclasses.replace(cfg, eval=eval_cfg), Path(args.checkpoint), report, int(ckpt.get("step", 0)))
     return 0
 
 

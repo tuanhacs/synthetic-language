@@ -4,6 +4,7 @@
 # If a specific CUDA build of PyTorch is needed, install it first.
 torch>=2.1
 PyYAML>=6.0
+wandb>=0.17
 
 # Install both local packages in editable mode.
 -e ./data

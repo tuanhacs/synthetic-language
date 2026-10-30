@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Server sweep: one semantic QA pool, nested train subsets, prefix/suffix."""
+"""Server sweep: one semantic QA pool, nested train subsets, prefix/suffix/UD."""
 
 from __future__ import annotations
 
@@ -53,7 +53,8 @@ def run(script: str, arguments: list[str], log: Path, dry_run: bool) -> None:
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--stage", choices=("pool", "all"), default="all")
-    ap.add_argument("--code-types", nargs="+", choices=("prefix", "suffix"), default=["prefix", "suffix"])
+    ap.add_argument("--code-types", nargs="+", choices=("prefix", "suffix", "ud"), default=["prefix", "suffix"])
+    ap.add_argument("--ud-pool", type=Path, default=ROOT / "data/codeword_pools/hard_ud_codebook_200.json")
     ap.add_argument("--pool-train-pairs", type=int, default=3_000_000)
     ap.add_argument("--train-min", type=int, default=600_000)
     ap.add_argument("--train-max", type=int, default=2_000_000)
@@ -91,6 +92,12 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--output-root", type=Path)
     ap.add_argument("--latent-pool", type=Path, help="optional existing shared latent pool")
+    ap.add_argument("--wandb", action="store_true", help="enable online W&B tracking for each train/eval run")
+    ap.add_argument("--wandb-mode", choices=("disabled", "online", "offline"), default=None)
+    ap.add_argument("--wandb-project", default="synthetic-language")
+    ap.add_argument("--wandb-entity", default=None)
+    ap.add_argument("--wandb-group", default=None)
+    ap.add_argument("--wandb-tags", nargs="+", default=[])
     ap.add_argument("--dry-run", action="store_true", help="print commands without generating files or starting jobs")
     return ap
 
@@ -98,6 +105,10 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     ap = parser()
     args = ap.parse_args(argv)
+    args.code_types = list(dict.fromkeys(args.code_types))
+    wandb_mode = args.wandb_mode or ("online" if args.wandb else "disabled")
+    if "ud" in args.code_types and args.stage != "pool" and not args.ud_pool.is_file():
+        ap.error(f"UD codeword pool not found: {args.ud_pool}")
     for name in ("pool_train_pairs", "train_min", "train_max", "train_step",
                  "valid_query_pairs", "test_query_pairs", "max_steps", "batch_size",
                  "eval_every", "checkpoint_every", "eval_samples", "gen_batch_size"):
@@ -117,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("early stopping min-delta must be finite and non-negative")
     sizes = list(range(args.train_min, args.train_max + 1, args.train_step))
     # Always establish prefix as the assignment-slot reference, even for a
-    # suffix-only worker. Independent workers can share a pre-created pool.
+    # suffix/UD-only worker. Independent workers can share a pre-created pool.
     pairs = []
     if args.qa_mode == "heldout":
         try:
@@ -128,7 +139,8 @@ def main(argv: list[str] | None = None) -> int:
             ap.error("--heldout-pairs must look like 3-16,7-21,10-35")
     settings = {key: str(value) if isinstance(value, Path) else value
                 for key, value in vars(args).items()
-                if key not in ("stage", "dry_run", "output_root", "code_types")}
+                if key not in ("stage", "dry_run", "output_root", "code_types", "ud_pool")
+                and not key.startswith("wandb")}
     # Preserve settings identity for existing step-only sweeps with all new
     # options disabled/defaulted.
     for key, default in (("eval_batches", 20),
@@ -161,6 +173,9 @@ def main(argv: list[str] | None = None) -> int:
             "k": [args.k_min, args.k_max],
             "assignment": "arbitrary-overlap" if args.assignment == "overlap" else "disjoint-random",
         }
+        if kind == "ud":
+            language["code"] = {"type": "ud"}
+            language["codeword_pool_file"] = str(args.ud_pool.resolve())
         if args.assignment == "overlap":
             language["overlap"] = {"support_size": [2, 4], "shared_codewords": args.shared_codewords,
                                    "max_restarts": 100, "candidate_trials": 10_000}
@@ -179,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
         parse_config(data_config(kind))
     if not args.dry_run:
         write_config(out / "sweep_settings.yaml", settings)
-        for kind in ("prefix", "suffix"):
+        for kind in dict.fromkeys(["prefix", *args.code_types]):
             write_config(out / "configs" / f"data_{kind}.yaml", data_config(kind))
     pool_config = out / "configs" / "data_prefix.yaml"
     if not (pool / "manifest.json").exists():
@@ -203,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
 
     template = out / "datasets" / "prefix" / str(sizes[0]) / "codebook.json"
     references = {}
-    # Prepare prefix once if this worker trains only suffix.
+    # Prepare prefix once if this worker trains only suffix/UD.
     kinds = ["prefix", *[kind for kind in dict.fromkeys(args.code_types) if kind != "prefix"]]
     for kind in kinds:
         for count in sizes if kind in args.code_types else sizes[:1]:
@@ -251,6 +266,14 @@ def main(argv: list[str] | None = None) -> int:
                          "temperature": args.temperature, "seed": args.seed, "max_len": context},
             }
             model_path = out / "configs" / f"model_{name}.yaml"
+            if wandb_mode != "disabled":
+                model_config["wandb"] = {
+                    "mode": wandb_mode, "project": args.wandb_project,
+                    "entity": args.wandb_entity, "group": args.wandb_group or out.name,
+                    "name": name, "tags": list(dict.fromkeys([
+                        *args.wandb_tags, kind, args.qa_mode, args.assignment, args.cot_mode,
+                    ])),
+                }
             for key, default in (("eval_batches", 20),
                                  ("early_stopping_patience", 0), ("early_stopping_min_delta", 0.0)):
                 if getattr(args, key) != default:

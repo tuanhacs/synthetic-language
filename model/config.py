@@ -142,12 +142,32 @@ class EvalConfig:
 
 
 @dataclass(frozen=True)
+class WandbConfig:
+    mode: str = "disabled"
+    project: str = "synthetic-language"
+    entity: str | None = None
+    name: str | None = None
+    group: str | None = None
+    tags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("disabled", "online", "offline"):
+            raise ConfigError("wandb.mode must be disabled, online or offline")
+        if not isinstance(self.project, str) or not self.project.strip():
+            raise ConfigError("wandb.project must not be empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**self.__dict__, "tags": list(self.tags)}
+
+
+@dataclass(frozen=True)
 class Config:
     model: ModelConfig = field(default_factory=ModelConfig)
     data: DataConfig = field(default_factory=DataConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     path: str | None = None  # config file this came from, if any
+    wandb: WandbConfig = field(default_factory=WandbConfig)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -155,6 +175,7 @@ class Config:
             "data": self.data.to_dict(),
             "train": self.train.to_dict(),
             "eval": self.eval.to_dict(),
+            "wandb": self.wandb.to_dict(),
             "path": self.path,
         }
 
@@ -201,7 +222,7 @@ def _model_config(raw: dict[str, Any]) -> ModelConfig:
 
 def parse_config(raw: dict[str, Any], path: str | None = None) -> Config:
     """Build a validated :class:`Config` from a plain dict."""
-    _check_keys(raw, {"model", "data", "train", "eval"}, "top-level")
+    _check_keys(raw, {"model", "data", "train", "eval", "wandb"}, "top-level")
 
     data_raw = dict(raw.get("data") or {})
     _check_keys(data_raw, {"dataset_dir", "mode", "stream_seed"}, "data")
@@ -225,6 +246,12 @@ def parse_config(raw: dict[str, Any], path: str | None = None) -> Config:
             raise ConfigError("eval.cuts must be a list of non-negative prefix lengths")
         eval_raw["cuts"] = tuple(int(c) for c in cuts)
 
+    wandb_raw = dict(raw.get("wandb") or {})
+    _check_keys(wandb_raw, set(WandbConfig().__dict__), "wandb")
+    tags = wandb_raw.get("tags", ())
+    if not isinstance(tags, (list, tuple)) or any(not isinstance(tag, str) for tag in tags):
+        raise ConfigError("wandb.tags must be a list of strings")
+    wandb_raw["tags"] = tuple(tags)
     cfg = Config(
         model=_model_config(dict(raw.get("model") or {})),
         data=DataConfig(
@@ -236,6 +263,7 @@ def parse_config(raw: dict[str, Any], path: str | None = None) -> Config:
         ),
         train=TrainConfig(**train_raw),
         eval=EvalConfig(**eval_raw),
+        wandb=WandbConfig(**wandb_raw),
         path=path,
     )
     if cfg.train.checkpoint_every < 1:
