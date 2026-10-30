@@ -6,6 +6,8 @@ import hashlib
 import json
 import random
 import tempfile
+import math
+import statistics
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
@@ -100,6 +102,29 @@ def eligible_pairs(graph: GridGraph, task: TaskConfig, split: str) -> set[tuple[
 def _coverage(counts: Counter, eligible: set) -> dict[str, Any]:
     frequencies = [counts[key] for key in sorted(eligible)]
     unseen = [key for key in sorted(eligible) if not counts[key]]
+    total = sum(frequencies)
+
+    def summary(values: list[int]) -> dict:
+        if not values:
+            return dict.fromkeys(("min", "median", "mean", "p95", "max", "std", "cv"))
+        ordered = sorted(values)
+        mean = statistics.mean(ordered)
+        std = statistics.pstdev(ordered)
+        return {
+            "min": ordered[0], "median": statistics.median(ordered), "mean": mean,
+            "p95": ordered[math.ceil(.95 * len(ordered)) - 1], "max": ordered[-1],
+            "std": std, "cv": std / mean if mean else None,
+        }
+
+    maximum = max(frequencies, default=0)
+    width = max(1, math.ceil(maximum / 10))
+    # Preserve zero as its own bin. Positive bins summarize exact frequencies
+    # without flooding logs when there are thousands of distinct counts.
+    bins = [{"min_count": 0, "max_count": 0, "num_items": len(unseen)}]
+    for lower in range(1, maximum + 1, width):
+        upper = min(lower + width - 1, maximum)
+        bins.append({"min_count": lower, "max_count": upper,
+                     "num_items": sum(lower <= value <= upper for value in frequencies)})
     return {
         "eligible": len(eligible),
         "seen": len(eligible) - len(unseen),
@@ -107,8 +132,39 @@ def _coverage(counts: Counter, eligible: set) -> dict[str, Any]:
         "unseen": [list(key) for key in unseen],
         "frequency_histogram_including_zero": dict(sorted(Counter(frequencies).items())),
         "frequencies": {f"{u},{v}": counts[u, v] for u, v in sorted(eligible)},
+        "total_occurrences": total,
+        "relative_frequencies": {
+            f"{u},{v}": counts[u, v] / total if total else 0.0
+            for u, v in sorted(eligible)
+        },
+        "relative_frequency_denominator": "total occurrences among the eligible items in this report",
+        "frequency_summary_including_zero": summary(frequencies),
+        "frequency_summary_observed_only": summary([value for value in frequencies if value]),
+        "binned_frequency_histogram": bins,
         "observed_outside_eligible": [list(key) for key in sorted(set(counts) - eligible)],
     }
+
+
+def frequency_report_lines(stats: dict[str, Any]) -> list[str]:
+    """Compact console report; full per-item counts remain in the manifest."""
+    lines = []
+    for name in ("query_pairs_directed", "query_pairs_undirected",
+                 "graph_edges_directed", "graph_edges_undirected"):
+        report = stats[name]
+        summary = report["frequency_summary_including_zero"]
+        lines.append(f"  {name}: seen={report['seen']}/{report['eligible']} "
+                     f"occurrences={report['total_occurrences']}")
+        lines.append("    frequency (including zero): " + " ".join(
+            f"{key}={value:.4g}" if isinstance(value, (float, int)) else f"{key}={value}"
+            for key, value in summary.items()
+        ))
+        histogram = {
+            str(b["min_count"]) if b["min_count"] == b["max_count"]
+            else f"{b['min_count']}..{b['max_count']}": b["num_items"]
+            for b in report["binned_frequency_histogram"]
+        }
+        lines.append(f"    count histogram (occurrences -> number of pairs/edges): {histogram}")
+    return lines
 
 
 class SemanticStats:

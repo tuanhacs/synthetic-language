@@ -31,7 +31,7 @@ from synthdata.graphs import graph_from_spec  # noqa: E402
 from synthdata.language import Language  # noqa: E402
 from synthdata.noise import apply_noise  # noqa: E402
 from synthdata.qa import build_qa_splits, qa_pool_stats  # noqa: E402
-from synthdata.qa_latent import encode_latent_pool, semantic_stats  # noqa: E402
+from synthdata.qa_latent import encode_latent_pool, semantic_stats, frequency_report_lines  # noqa: E402
 from synthdata.storage import save_dataset  # noqa: E402
 
 
@@ -241,6 +241,8 @@ def build(
             log(f"{name}: query-length histogram={stats['histograms']['query_vertices']}")
             log(f"  query-pair coverage {pairs['seen']}/{pairs['eligible']}; "
                 f"graph-edge coverage {edges['seen']}/{edges['eligible']}")
+            for line in frequency_report_lines(stats):
+                log(line)
     if latent_provenance is not None:
         extra["latent_pool"] = latent_provenance
     if assignment_template is not None:

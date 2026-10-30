@@ -569,6 +569,18 @@ reported separately. Graph edges are counted once on the final walk, without
 double-counting the CoT fields. Encoded bits and full-sequence lengths retain their
 existing reports.
 
+Each pair/edge coverage report also includes `total_occurrences`, per-item
+`relative_frequencies` (fractions summing to 1 within the report's eligible set
+when occurrences are nonzero), and count summaries both including zero-frequency
+items and for observed items only: min, median, mean, p95, max, population standard
+deviation and coefficient of variation (`cv = std / mean`). The exact
+`frequency_histogram_including_zero` maps occurrence counts to the number of
+pairs/edges having that count. `binned_frequency_histogram` groups positive counts
+into at most 10 ranges, keeping zero separate; this compact version is printed in
+generation logs for both directed and undirected pairs/edges. Full details are
+stored for every split and requested latent train checkpoint. Existing manifests
+are not updated automatically; regenerate the report/data to get these fields.
+
 ### Modal
 
 The local, git-ignored `app_path_qa.py` accepts the same workflow. For example:

@@ -126,6 +126,26 @@ class LatentPoolTests(unittest.TestCase):
         edges = stats["graph_edges_directed"]
         self.assertEqual(sum(edges["frequencies"].values()), 4)
         self.assertEqual(edges["seen"], 4)
+        pairs = stats["query_pairs_directed"]
+        self.assertEqual(pairs["frequencies"]["0,5"], 1)
+        self.assertEqual(pairs["relative_frequencies"]["0,5"], 0.5)
+        self.assertAlmostEqual(sum(pairs["relative_frequencies"].values()), 1.0)
+        self.assertEqual(pairs["frequency_summary_including_zero"]["min"], 0)
+        self.assertEqual(pairs["frequency_summary_including_zero"]["median"], 0)
+        self.assertEqual(pairs["frequency_summary_observed_only"]["min"], 1)
+        self.assertEqual(pairs["frequency_summary_observed_only"]["median"], 1)
+        self.assertEqual(sum(b["num_items"] for b in pairs["binned_frequency_histogram"]), 240)
+        self.assertEqual(edges["total_occurrences"], 4)
+        self.assertEqual(edges["relative_frequencies"]["0,1"], 0.25)
+
+    def test_empty_frequency_report(self):
+        stats = semantic_stats([], self.graph, self.task, "train")
+        pairs = stats["query_pairs_directed"]
+        self.assertEqual(pairs["total_occurrences"], 0)
+        self.assertEqual(sum(pairs["relative_frequencies"].values()), 0)
+        self.assertEqual(pairs["frequency_summary_including_zero"]["mean"], 0)
+        self.assertIsNone(pairs["frequency_summary_observed_only"]["mean"])
+        self.assertIsNone(pairs["frequency_summary_including_zero"]["cv"])
 
     def test_assignment_remap_preserves_shared_slots(self):
         graph = make_grid(2)

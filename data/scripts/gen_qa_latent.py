@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from synthdata.config import load_config
 from synthdata.graphs import graph_from_spec
-from synthdata.qa_latent import create_latent_pool
+from synthdata.qa_latent import create_latent_pool, frequency_report_lines
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{split}: query length histogram={stats['histograms']['query_vertices']}")
         print(f"  directed query-pair coverage: {pairs['seen']}/{pairs['eligible']}")
         print(f"  undirected graph-edge coverage: {edges['seen']}/{edges['eligible']}")
+        for line in frequency_report_lines(stats):
+            print(line)
     print(f"Histogram, frequencies, coverage and checkpoint reports: {Path(args.out) / 'manifest.json'}")
     return 0
 
