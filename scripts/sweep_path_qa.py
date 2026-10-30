@@ -82,6 +82,9 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--eval-every", type=int, default=250)
+    ap.add_argument("--eval-batches", type=int, default=20)
+    ap.add_argument("--early-stopping-patience", type=int, default=0)
+    ap.add_argument("--early-stopping-min-delta", type=float, default=0.0)
     ap.add_argument("--checkpoint-every", type=int, default=250)
     ap.add_argument("--eval-samples", type=int, default=1000)
     ap.add_argument("--gen-batch-size", type=int, default=512)
@@ -108,6 +111,10 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("model dimensions must be positive and d-model divisible by n-heads")
     if args.lr <= 0 or args.temperature <= 0:
         ap.error("lr and temperature must be positive")
+    if args.eval_batches < 1 or args.early_stopping_patience < 0:
+        ap.error("validation intervals/batches must be positive and patience non-negative")
+    if not 0 <= args.early_stopping_min_delta < float("inf"):
+        ap.error("early stopping min-delta must be finite and non-negative")
     sizes = list(range(args.train_min, args.train_max + 1, args.train_step))
     # Always establish prefix as the assignment-slot reference, even for a
     # suffix-only worker. Independent workers can share a pre-created pool.
@@ -122,6 +129,12 @@ def main(argv: list[str] | None = None) -> int:
     settings = {key: str(value) if isinstance(value, Path) else value
                 for key, value in vars(args).items()
                 if key not in ("stage", "dry_run", "output_root", "code_types")}
+    # Preserve settings identity for existing step-only sweeps with all new
+    # options disabled/defaulted.
+    for key, default in (("eval_batches", 20),
+                         ("early_stopping_patience", 0), ("early_stopping_min_delta", 0.0)):
+        if settings[key] == default:
+            settings.pop(key)
     tag = hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:12]
     out = args.output_root or ROOT / "model" / "outputs" / "path_qa_sweeps" / (
         f"{args.qa_mode}_{args.assignment}_q{args.query_min}-{args.query_max}_{args.cot_mode}_{tag}"
@@ -238,13 +251,19 @@ def main(argv: list[str] | None = None) -> int:
                          "temperature": args.temperature, "seed": args.seed, "max_len": context},
             }
             model_path = out / "configs" / f"model_{name}.yaml"
+            for key, default in (("eval_batches", 20),
+                                 ("early_stopping_patience", 0), ("early_stopping_min_delta", 0.0)):
+                if getattr(args, key) != default:
+                    model_config["train"][key] = getattr(args, key)
             if not args.dry_run:
                 write_config(model_path, model_config)
             trained = run_dir / "training_complete.json"
             if not (trained.exists() and (run_dir / "best.pt").exists()):
                 run("model/scripts/train.py", [str(model_path)], out / "logs" / f"{name}_train.log", args.dry_run)
                 if not args.dry_run:
-                    trained.write_text(json.dumps({"max_steps": args.max_steps}) + "\n")
+                    summary_path = run_dir / "train_summary.json"
+                    completion = json.loads(summary_path.read_text()) if summary_path.exists() else {"max_steps": args.max_steps}
+                    trained.write_text(json.dumps(completion) + "\n")
             else:
                 print(f"Training already completed: {name}")
             evaluated = run_dir / "evaluation_complete.json"
@@ -269,6 +288,12 @@ def main(argv: list[str] | None = None) -> int:
                     "success_pct": metrics["semantic_success_pct"],
                     "report": str(run_dir / "eval_report.json"),
                 }
+                train_summary_path = run_dir / "train_summary.json"
+                train_summary = json.loads(train_summary_path.read_text()) if train_summary_path.exists() else {}
+                row.update({key: train_summary.get(key) for key in (
+                    "steps", "max_steps", "stopped_early",
+                    "stop_reason", "best_valid_bits_per_token",
+                )})
                 summary_path = out / "results.json"
                 summary = json.loads(summary_path.read_text()) if summary_path.exists() else []
                 summary = [r for r in summary if (r["code_type"], r["train_pairs_requested"]) != (kind, count)]

@@ -54,6 +54,42 @@ RoPE means `context_len` costs no parameters; it only sizes the (non-persistent)
 
 ## 2. Integration with the data side
 
+### Validation early stopping
+
+Training remains step-based with random window sampling with replacement.
+`max_steps` is the hard upper bound; validation early stopping can stop it sooner.
+
+```bash
+python model/scripts/train.py YOUR_MODEL_CONFIG.yaml \
+  --device cuda --max-steps 100000 --batch-size 64 \
+  --eval-every 250 --eval-batches 20 \
+  --early-stopping-patience 20 \
+  --early-stopping-min-delta 0.0001
+```
+
+Validation runs every `eval_every` steps, after step 1 and at the final step, as
+before. Validation remains a
+deterministic subset of up to `eval_batches` batches, not a full final validation
+pass. The test split is not used for early stopping. Set the validation batch
+budget consistently across comparisons.
+
+`early_stopping_patience` counts consecutive validation checks without an
+improvement larger than `early_stopping_min_delta` (absolute bits/token).
+It defaults to 0 (disabled). With validation every 250 steps, patience 20 means
+20 consecutive checks (normally 5000 steps) without sufficient improvement.
+The early-stopping reference tracks significant improvements; `best.pt` still
+tracks the lowest raw validation loss, including smaller improvements.
+
+`latest.pt` saves optimizer/RNG/sampler state and early-stopping state.
+Resuming restores all of them; an already early-stopped
+run does not start training again. Logs and `train_summary.json` report actual
+steps and `stop_reason` (`max_steps` or `early_stopping`).
+Changing the stopping policy requires a new output directory
+or an explicit fresh run. Existing default step-mode checkpoints remain compatible.
+
+The cosine learning-rate schedule still uses `max_steps` as its horizon. Raising
+this limit therefore changes LR decay as well as the maximum training duration.
+
 `synthdata` lives in the sibling `../data` folder and is **not** listed as a
 dependency. `_paths.py` contains a one-function **path shim**: if
 `synthdata` is not already importable, it prepends `<repo>/data` to `sys.path`. A

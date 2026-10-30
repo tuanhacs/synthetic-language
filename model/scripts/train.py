@@ -33,11 +33,16 @@ def positive_int(value: str) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("config", help="run config YAML (see configs/smoke.yaml)")
-    ap.add_argument("--max-steps", type=int, default=None)
+    ap.add_argument("--max-steps", type=positive_int, default=None)
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--checkpoint-every", type=positive_int, default=None)
+    ap.add_argument("--eval-every", type=positive_int, default=None)
+    ap.add_argument("--eval-batches", type=positive_int, default=None)
+    ap.add_argument("--early-stopping-patience", type=int, default=None,
+                    help="stop after this many validation checks without significant improvement; 0 disables")
+    ap.add_argument("--early-stopping-min-delta", type=float, default=None, help="absolute bits/token improvement")
     ap.add_argument(
         "--resume",
         choices=("auto", "never", "require"),
@@ -61,6 +66,10 @@ def main() -> int:
             "lr": args.lr,
             "seed": args.seed,
             "checkpoint_every": args.checkpoint_every,
+            "eval_every": args.eval_every,
+            "eval_batches": args.eval_batches,
+            "early_stopping_patience": args.early_stopping_patience,
+            "early_stopping_min_delta": args.early_stopping_min_delta,
             "resume": args.resume,
             "out_dir": args.out_dir,
             "device": args.device,

@@ -16,6 +16,7 @@ import math
 import os
 import random
 import time
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 import torch
@@ -33,6 +34,25 @@ from data import (
 )
 from evals import LN2, bits_per_token
 from model import build_model
+
+
+@dataclass
+class EarlyStopping:
+    best: float = float("inf")
+    bad_checks: int = 0
+    stopped: bool = False
+
+    def update(self, value: float, cfg) -> bool:
+        if not math.isfinite(value):
+            raise ValueError("validation loss must be finite for early stopping")
+        if value < self.best - cfg.early_stopping_min_delta:
+            self.best = value
+            self.bad_checks = 0
+        else:
+            self.bad_checks += 1
+        self.stopped = bool(cfg.early_stopping_patience and
+                            self.bad_checks >= cfg.early_stopping_patience)
+        return self.stopped
 
 
 def lr_at(step: int, cfg) -> float:
@@ -120,6 +140,8 @@ def train(cfg: Config, verbose: bool = True) -> dict:
         if data.valid.numel()
         else None
     )
+    if cfg.train.early_stopping_patience and valid_sampler is None:
+        raise ValueError("early stopping requires a non-empty validation split")
 
     latest_path = out_dir / "latest.pt"
     should_resume = cfg.train.resume in ("auto", "require") and latest_path.exists()
@@ -128,6 +150,7 @@ def train(cfg: Config, verbose: bool = True) -> dict:
 
     start_step = 0
     best_valid = float("inf")
+    early_stopping = EarlyStopping()
     if should_resume:
         # RNG states must remain CPU ByteTensors. Loading the whole checkpoint
         # directly onto CUDA turns them into CUDA tensors, which
@@ -139,6 +162,7 @@ def train(cfg: Config, verbose: bool = True) -> dict:
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_step = int(checkpoint["step"])
         best_valid = float(checkpoint.get("best_valid_bits_per_token", float("inf")))
+        early_stopping = EarlyStopping(**checkpoint.get("early_stopping", {}))
         if sampler is None:
             raise ValueError(
                 "exact checkpoint resume is currently supported only for frozen data"
@@ -163,18 +187,21 @@ def train(cfg: Config, verbose: bool = True) -> dict:
         print(f"              train windows: {n_train_windows}  tokens: {data.token_counts()}")
         print(f"entropy floor {floor if floor is None else f'{floor:.4f}'} bits/token")
         print(f"out_dir       {out_dir}")
+        if cfg.train.early_stopping_patience:
+            print(f"early stop    patience={cfg.train.early_stopping_patience} validation checks, "
+                  f"min_delta={cfg.train.early_stopping_min_delta} b/t")
         if should_resume:
             print(f"resume        {latest_path}  (completed step {start_step})")
         else:
             print(f"resume        no ({cfg.train.resume})")
 
-    if start_step >= cfg.train.max_steps:
+    if start_step >= cfg.train.max_steps or early_stopping.stopped:
         if verbose:
             print(
                 f"training already complete at step {start_step}; "
                 "leaving checkpoints unchanged"
             )
-        return {
+        completed = {
             "out_dir": str(out_dir),
             "device": str(device),
             "num_params": model.num_params(),
@@ -184,13 +211,22 @@ def train(cfg: Config, verbose: bool = True) -> dict:
             ),
             "resumed_complete": True,
             "history": [],
+            "max_steps": cfg.train.max_steps,
+            "stopped_early": early_stopping.stopped,
+            "stop_reason": "early_stopping" if early_stopping.stopped else "max_steps",
         }
+        summary_path = out_dir / "train_summary.json"
+        if not summary_path.exists():
+            summary_path.write_text(json.dumps({k: v for k, v in completed.items() if k != "history"}, indent=2) + "\n",
+                                    encoding="utf-8")
+        return completed
 
     history: list[dict] = []
     start_time = time.time()
     first_train_bits: float | None = None
     last_train_bits = float("nan")
     last_valid_bits: float | None = None
+    completed_steps = start_step
 
     for step in range(start_step, cfg.train.max_steps):
         lr = lr_at(step, cfg.train)
@@ -225,8 +261,9 @@ def train(cfg: Config, verbose: bool = True) -> dict:
             first_train_bits = train_bits
 
         is_last = step + 1 == cfg.train.max_steps
+        completed_steps = step + 1
         do_eval = valid_sampler is not None and (
-            (step + 1) % cfg.train.eval_every == 0 or is_last or step == 0
+            completed_steps % cfg.train.eval_every == 0 or is_last or step == 0
         )
         valid_bits = None
         if do_eval:
@@ -239,6 +276,8 @@ def train(cfg: Config, verbose: bool = True) -> dict:
             if valid_bits < best_valid:
                 best_valid = valid_bits
                 save_checkpoint(out_dir / "best.pt", model, cfg, step + 1, valid_bits)
+            if cfg.train.early_stopping_patience:
+                early_stopping.update(valid_bits, cfg.train)
 
         if (step + 1) % cfg.train.log_every == 0 or is_last or step == 0 or do_eval:
             record = {
@@ -247,6 +286,7 @@ def train(cfg: Config, verbose: bool = True) -> dict:
                 "train_bits_per_token": train_bits,
                 "valid_bits_per_token": valid_bits,
                 "elapsed_s": time.time() - start_time,
+                "early_stopping_bad_checks": early_stopping.bad_checks,
             }
             history.append(record)
             with metrics_path.open("a", encoding="utf-8") as fh:
@@ -256,10 +296,12 @@ def train(cfg: Config, verbose: bool = True) -> dict:
                          f"train {train_bits:.4f} b/t"]
                 if valid_bits is not None:
                     parts.append(f"valid {valid_bits:.4f} b/t")
+                if do_eval and cfg.train.early_stopping_patience:
+                    parts.append(f"patience {early_stopping.bad_checks}/{cfg.train.early_stopping_patience}")
                 parts.append(f"{record['elapsed_s']:.0f}s")
                 print("  ".join(parts))
 
-        if (step + 1) % cfg.train.checkpoint_every == 0 or is_last:
+        if (step + 1) % cfg.train.checkpoint_every == 0 or is_last or early_stopping.stopped:
             save_training_checkpoint(
                 latest_path,
                 model,
@@ -269,15 +311,25 @@ def train(cfg: Config, verbose: bool = True) -> dict:
                 step + 1,
                 best_valid,
                 sampler,
+                early_stopping_state=asdict(early_stopping),
             )
             if verbose:
                 print(f"checkpoint    {latest_path}  (step {step + 1})", flush=True)
+        if early_stopping.stopped:
+            if verbose:
+                print(f"early stopping at step {completed_steps}; "
+                      f"no significant validation improvement for {early_stopping.bad_checks} checks", flush=True)
+            break
 
     summary = {
         "out_dir": str(out_dir),
         "device": str(device),
         "num_params": model.num_params(),
-        "steps": cfg.train.max_steps,
+        "steps": completed_steps,
+        "max_steps": cfg.train.max_steps,
+        "stopped_early": early_stopping.stopped,
+        "stop_reason": "early_stopping" if early_stopping.stopped else "max_steps",
+        "early_stopping_bad_checks": early_stopping.bad_checks,
         "first_train_bits_per_token": first_train_bits,
         "last_train_bits_per_token": last_train_bits,
         "best_valid_bits_per_token": None if best_valid == float("inf") else best_valid,
@@ -293,7 +345,7 @@ def train(cfg: Config, verbose: bool = True) -> dict:
     if verbose:
         parts = [
             f"done in {summary['elapsed_s']:.0f}s",
-            f"best valid {summary['best_valid_bits_per_token']:.4f} b/t",
+            f"best valid {summary['best_valid_bits_per_token']} b/t",
         ]
         if last_valid_bits is not None:
             parts.append(
@@ -368,7 +420,7 @@ def _trim_metrics(path: Path, completed_step: int) -> None:
 def _resume_signature(cfg: Config) -> dict:
     """Fields that must stay fixed for an exact continuation."""
     train = cfg.train
-    return {
+    signature = {
         "model": cfg.model.to_dict(),
         "data_mode": cfg.data.mode,
         "train": {
@@ -386,6 +438,14 @@ def _resume_signature(cfg: Config) -> dict:
             )
         },
     }
+    if train.early_stopping_patience:
+        signature["stopping"] = {
+            key: getattr(train, key) for key in (
+                "eval_every", "eval_batches",
+                "early_stopping_patience", "early_stopping_min_delta",
+            )
+        }
+    return signature
 
 
 def save_training_checkpoint(
@@ -397,6 +457,7 @@ def save_training_checkpoint(
     step: int,
     best_valid: float,
     sampler: BatchSampler | None,
+    early_stopping_state: dict | None = None,
 ) -> None:
     """Write the complete state required to continue training."""
     _atomic_torch_save(
@@ -410,6 +471,7 @@ def save_training_checkpoint(
             "step": step,
             "best_valid_bits_per_token": best_valid,
             "train_sampler": None if sampler is None else sampler.state_dict(),
+            "early_stopping": early_stopping_state or asdict(EarlyStopping()),
             "rng_state": _rng_state(),
         },
         path,

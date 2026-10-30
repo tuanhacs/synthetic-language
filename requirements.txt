@@ -1,0 +1,10 @@
+# Server environment for dataset generation, training, evaluation and sweeps.
+# Python >= 3.10. Run from the repository root:
+#   python -m pip install -r requirements.txt
+# If a specific CUDA build of PyTorch is needed, install it first.
+torch>=2.1
+PyYAML>=6.0
+
+# Install both local packages in editable mode.
+-e ./data
+-e ./model

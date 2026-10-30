@@ -34,7 +34,7 @@ class SweepTests(unittest.TestCase):
                          "--train-min", "12", "--train-max", "20", "--train-step", "4",
                          "--valid-query-pairs", "10", "--test-query-pairs", "10",
                          "--qa-mode", "iid", "--assignment", "disjoint", "--cot-mode", "none",
-                         "--max-steps", "1", "--eval-samples", "1"]
+                         "--max-steps", "10", "--early-stopping-patience", "2", "--eval-samples", "1"]
             real_run = sweep.run
             calls = []
 
@@ -42,9 +42,15 @@ class SweepTests(unittest.TestCase):
                 calls.append(script)
                 if script == "model/scripts/train.py":
                     cfg = yaml.safe_load(Path(args[0]).read_text())
+                    self.assertEqual(cfg["train"]["max_steps"], 10)
+                    self.assertEqual(cfg["train"]["early_stopping_patience"], 2)
                     run_dir = Path(cfg["train"]["out_dir"])
                     run_dir.mkdir(parents=True)
                     (run_dir / "best.pt").write_bytes(b"mock GPU checkpoint")
+                    (run_dir / "train_summary.json").write_text(json.dumps({
+                        "steps": 2, "max_steps": 10,
+                        "stopped_early": True, "stop_reason": "early_stopping",
+                    }))
                 elif script == "model/scripts/evaluate.py":
                     run_dir = Path(args[0]).parent
                     (run_dir / "eval_report.json").write_text(json.dumps({"generation": {"path_qa": {
@@ -57,6 +63,8 @@ class SweepTests(unittest.TestCase):
                 self.assertEqual(sweep.main(arguments), 0)
                 summary = json.loads((output / "results.json").read_text())
                 self.assertEqual(len(summary), 6)
+                self.assertTrue(all(row["stopped_early"] for row in summary))
+                self.assertTrue(all(row["max_steps"] == 10 for row in summary))
                 count = len(calls)
                 self.assertEqual(sweep.main(arguments), 0)
                 self.assertEqual(len(calls), count)

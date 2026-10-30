@@ -677,3 +677,26 @@ Use `--code-types prefix` or `--code-types suffix` to train only one code type;
 suffix-only still prepares the small prefix reference needed for slot matching.
 Alternatively invoke `python scripts/sweep_path_qa.py` with the same options;
 the shell wrapper uses `${PYTHON:-python}` from the active environment.
+
+To let each run train longer until validation stops improving, increase
+`--max-steps` and enable validation early stopping:
+
+```bash
+CUDA_VISIBLE_DEVICES=2 bash scripts/sweep_path_qa.sh --stage all \
+  --qa-mode iid --assignment disjoint --cot-mode none \
+  --latent-pool ./data/outputs/latent_iid_q2-4_seed0_3m \
+  --max-steps 100000 --batch-size 64 \
+  --eval-every 250 --eval-batches 20 \
+  --early-stopping-patience 20 --early-stopping-min-delta 0.0001 \
+  --output-root ./model/outputs/path_qa_sweeps/iid_disjoint_none_bs64_earlystop
+```
+
+This uses the existing shared pool and the default 0.6M–2M sweep. The sampler and
+step-based training remain unchanged. Patience counts validation checks; here,
+20 failed checks normally span 5000 steps. The minimum required improvement is
+0.0001 bits/token. `best.pt` always tracks raw lowest validation loss. The test
+split is not used to decide when to stop. `results.json` includes actual `steps`,
+`max_steps`, `stopped_early`, `stop_reason` and best validation loss along with
+decodability/success. Use a new output root when changing batch/stopping settings;
+the same latent pool remains reusable. The cosine LR schedule still decays over
+the configured `max_steps` horizon.

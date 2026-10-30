@@ -96,11 +96,24 @@ class TrainConfig:
     log_every: int = 50
     eval_every: int = 250
     eval_batches: int = 20  # batches per validation pass
+    early_stopping_patience: int = 0  # consecutive validation checks; 0 disables
+    early_stopping_min_delta: float = 0.0  # absolute improvement in bits/token
     checkpoint_every: int = 250  # full resumable latest.pt interval
     resume: str = "auto"  # auto | never | require
     seed: int = 42
     out_dir: str = "outputs/run"
     device: str | None = None  # None = auto (cuda > mps > cpu)
+
+    def __post_init__(self) -> None:
+        for name in ("max_steps", "batch_size", "eval_every", "eval_batches", "checkpoint_every"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ConfigError(f"train.{name} must be a positive integer")
+        if (isinstance(self.early_stopping_patience, bool) or
+                not isinstance(self.early_stopping_patience, int) or self.early_stopping_patience < 0):
+            raise ConfigError("train.early_stopping_patience must be a non-negative integer")
+        if not 0 <= self.early_stopping_min_delta < float("inf"):
+            raise ConfigError("train.early_stopping_min_delta must be finite and non-negative")
 
     def to_dict(self) -> dict[str, Any]:
         d = self.__dict__.copy()
