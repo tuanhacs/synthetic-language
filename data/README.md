@@ -608,3 +608,72 @@ the checkpoint. The latent pool itself is stored on the Volume. Removing
 changes before running the local Modal launcher, since its image clones GitHub.
 The launcher pins the local Git commit so a new pushed revision refreshes the
 cached source automatically; uncommitted source changes are not uploaded.
+
+### Server sweep: prefix/suffix, 0.6M to 2M train pairs
+
+From the repository root, use `bash scripts/sweep_path_qa.sh`. It defaults to
+cross-region, overlap, segment CoT, query length 2–4, seed 0, and base model
+512/10/8 on CUDA. It reserves 100k pairs each for fixed validation and test,
+generates a latent pool of **3M train pairs**, and trains at 600k, 800k, 1M, 1.2M,
+1.4M, 1.6M, 1.8M and 2M train pairs. These budgets count occurrences, not unique
+pairs. Actual counts may exceed a boundary by a few pairs to retain whole samples.
+
+Install the packages in the server environment once:
+
+```bash
+python -m pip install -e ./data -e ./model
+```
+
+First inspect the plan without starting work:
+
+```bash
+bash scripts/sweep_path_qa.sh --dry-run
+```
+
+Generate only the shared pool first:
+
+```bash
+bash scripts/sweep_path_qa.sh --stage pool
+```
+
+Then start all 16 train/evaluate runs using that pool:
+
+```bash
+bash scripts/sweep_path_qa.sh --stage all
+```
+
+Keep the same experiment arguments in both invocations. For IID without CoT and
+disjoint assignment, for example, pass `--qa-mode iid --assignment disjoint
+--cot-mode none` to both commands. Use `--n-layers 12` to change model depth.
+`--train-min`, `--train-max`, `--train-step`, `--pool-train-pairs`,
+`--valid-query-pairs` and `--test-query-pairs` accept integer pair counts.
+
+An explicit output directory makes server management convenient:
+
+```bash
+bash scripts/sweep_path_qa.sh --stage pool --output-root /srv/experiments/qa_prefix_suffix
+bash scripts/sweep_path_qa.sh --stage all --output-root /srv/experiments/qa_prefix_suffix
+```
+
+Without `--output-root`, outputs live under `model/outputs/path_qa_sweeps/` in a
+directory derived from the settings. It contains `latent_pool/`, runtime YAMLs in
+`configs/`, encoded subsets in `datasets/`, checkpoints/evaluation reports in
+`runs/`, per-stage output in `logs/`, and consolidated results in `results.json`.
+Each result includes requested/actual train pairs, model settings, temperature,
+decodability and semantic success. Training defaults to 20k optimizer steps per
+run; runs execute sequentially (all prefix sizes, then all suffix sizes).
+
+Within each code type, all train sizes use the same codebooks and bit-identical
+validation/test files; the script verifies their checksums. Suffix assignments
+reuse the first prefix dataset's vertex slots/supports. Both encodings consume
+the same latent sample IDs. Context length comes from each encoded dataset's
+observed maximum. Existing complete datasets/pools are reused, interrupted
+training resumes from `latest.pt`, and completed training/evaluation stages are
+skipped on rerun. A conflicting configuration in an existing output directory
+raises an error instead of overwriting it. To start a distinct experiment, choose
+a new output root (or let the default settings-derived directory change).
+
+Use `--code-types prefix` or `--code-types suffix` to train only one code type;
+suffix-only still prepares the small prefix reference needed for slot matching.
+Alternatively invoke `python scripts/sweep_path_qa.py` with the same options;
+the shell wrapper uses `${PYTHON:-python}` from the active environment.
