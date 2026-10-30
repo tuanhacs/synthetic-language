@@ -406,7 +406,7 @@ def save_training_checkpoint(
             "optimizer": optimizer.state_dict(),
             "config": cfg.to_dict(),
             "resume_signature": _resume_signature(cfg),
-            "dataset_config_hash": data.manifest.get("config_hash"),
+            "dataset_config_hash": data.manifest.get("dataset_fingerprint", data.manifest.get("config_hash")),
             "step": step,
             "best_valid_bits_per_token": best_valid,
             "train_sampler": None if sampler is None else sampler.state_dict(),
@@ -424,7 +424,7 @@ def _validate_resume_checkpoint(checkpoint: dict, cfg: Config, data: PackedData)
             "latest.pt is incompatible with the current model/training config; "
             "use train.resume: never or a different out_dir"
         )
-    expected_hash = data.manifest.get("config_hash")
+    expected_hash = data.manifest.get("dataset_fingerprint", data.manifest.get("config_hash"))
     if checkpoint.get("dataset_config_hash") != expected_hash:
         raise ValueError(
             "latest.pt belongs to a different dataset config hash: "

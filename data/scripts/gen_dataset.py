@@ -12,6 +12,7 @@ does not have.
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import sys
 from pathlib import Path
@@ -22,7 +23,7 @@ _HERE = str(Path(__file__).resolve().parent)
 sys.path[:] = [p for p in sys.path if p not in ("", _HERE)]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from synthdata.codebooks import assign  # noqa: E402
+from synthdata.codebooks import Codebooks, assign, remap_assignment  # noqa: E402
 from synthdata.codes import Code, certify as certify_code, load_codeword_pool, make_code  # noqa: E402
 from synthdata.config import Config, config_hash, load_config, validate_config  # noqa: E402
 from synthdata.dataset import build_pool, pool_stats, split_pool  # noqa: E402
@@ -30,6 +31,7 @@ from synthdata.graphs import graph_from_spec  # noqa: E402
 from synthdata.language import Language  # noqa: E402
 from synthdata.noise import apply_noise  # noqa: E402
 from synthdata.qa import build_qa_splits, qa_pool_stats  # noqa: E402
+from synthdata.qa_latent import encode_latent_pool, semantic_stats  # noqa: E402
 from synthdata.storage import save_dataset  # noqa: E402
 
 
@@ -58,6 +60,10 @@ def build(
     entropy_samples: int,
     quiet: bool = False,
     config_path: str | Path | None = None,
+    latent_pool: str | Path | None = None,
+    train_query_pairs: int | None = None,
+    encoding_seed: int = 0,
+    assignment_template: str | Path | None = None,
 ):
     def log(*args: object) -> None:
         if not quiet:
@@ -111,7 +117,14 @@ def build(
             f"[warn] pool slack is small: {len(pool_code)} words vs maximum required {max_needed}"
         )
     try:
-        codebooks = assign(cfg.language, graph, pool_code, rngs["assignment"])
+        if assignment_template is None:
+            codebooks = assign(cfg.language, graph, pool_code, rngs["assignment"])
+        else:
+            template_doc = json.loads(Path(assignment_template).read_text(encoding="utf-8"))
+            if template_doc.get("graph") != graph.to_dict():
+                raise ValueError("assignment template graph differs from config")
+            template = Codebooks.from_dict(template_doc["codebooks"])
+            codebooks = remap_assignment(template, cfg.language, graph, pool_code, rngs["assignment"])
     except ValueError as exc:
         raise SystemExit(f"ABORT: codebook assignment failed: {exc}") from None
     counts = codebooks.k_per_vertex
@@ -160,7 +173,15 @@ def build(
     if not report.unique_decoding:
         raise SystemExit("ABORT: language does not guarantee unique decoding")
 
-    if cfg.task.type == "path-qa":
+    latent_provenance = None
+    if latent_pool is not None:
+        if cfg.task.type != "path-qa":
+            raise ValueError("--latent-pool requires task.type: path-qa")
+        splits, latent_provenance = encode_latent_pool(
+            latent_pool, language, cfg.task, train_query_pairs, encoding_seed
+        )
+        pool = [sample for _, split in splits.items() for sample in split]
+    elif cfg.task.type == "path-qa":
         splits = build_qa_splits(
             language,
             cfg.task,
@@ -209,6 +230,21 @@ def build(
         )
 
     extra: dict[str, object] = {}
+    if cfg.task.type == "path-qa":
+        extra["semantic_splits"] = {
+            name: semantic_stats(split, graph, cfg.task, name)
+            for name, split in splits.items()
+        }
+        for name, stats in extra["semantic_splits"].items():
+            pairs = stats["query_pairs_directed"]
+            edges = stats["graph_edges_undirected"]
+            log(f"{name}: query-length histogram={stats['histograms']['query_vertices']}")
+            log(f"  query-pair coverage {pairs['seen']}/{pairs['eligible']}; "
+                f"graph-edge coverage {edges['seen']}/{edges['eligible']}")
+    if latent_provenance is not None:
+        extra["latent_pool"] = latent_provenance
+    if assignment_template is not None:
+        extra["assignment_template"] = str(Path(assignment_template).resolve())
     if qa_stats_by_split is not None:
         extra["observed_max_sequence_tokens"] = observed_max
         extra["recommended_context_len"] = recommended_context
@@ -230,6 +266,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("config", help="path to the YAML config")
     ap.add_argument("--out", required=True, help="output dataset directory")
+    ap.add_argument("--latent-pool", help="encode an existing gen_qa_latent.py pool")
+    ap.add_argument("--train-query-pairs", type=int, help="select a train prefix from --latent-pool")
+    ap.add_argument("--encoding-seed", type=int, default=0)
+    ap.add_argument("--assignment-template", help="codebook.json whose vertex slots/overlap supports to preserve")
     budget_group = ap.add_mutually_exclusive_group()
     budget_group.add_argument(
         "--pool-tokens",
@@ -253,6 +293,10 @@ def main(argv: list[str] | None = None) -> int:
         help="held-out sentences used for the entropy floor (0 = skip)",
     )
     args = ap.parse_args(argv)
+    if args.train_query_pairs is not None and not args.latent_pool:
+        ap.error("--train-query-pairs requires --latent-pool")
+    if args.latent_pool and (args.pool_tokens is not None or args.pool_query_pairs is not None):
+        ap.error("latent mode uses --train-query-pairs, not --pool-tokens/--pool-query-pairs")
 
     cfg = load_config(args.config)
     print(f"config: {args.config}  hash={config_hash(cfg)}")
@@ -274,6 +318,10 @@ def main(argv: list[str] | None = None) -> int:
         args.pool_query_pairs,
         args.entropy_samples,
         config_path=args.config,
+        latent_pool=args.latent_pool,
+        train_query_pairs=args.train_query_pairs,
+        encoding_seed=args.encoding_seed,
+        assignment_template=args.assignment_template,
     )
     if args.pool_tokens is not None:
         extra["pool_tokens_override"] = args.pool_tokens

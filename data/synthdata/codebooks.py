@@ -303,6 +303,33 @@ def _regime_subset(
     )
 
 
+def remap_assignment(
+    template: Codebooks, cfg: LanguageConfig, graph: GridGraph, pool: Code,
+    rng: random.Random,
+) -> Codebooks:
+    """Replace word labels while preserving every ordered vertex slot/support."""
+    if len(template) != graph.num_vertices:
+        raise ValueError("assignment template has a different vertex count")
+    lo, hi = cfg.k_range
+    if any(not lo <= count <= hi for count in template.k_per_vertex):
+        raise ValueError("assignment template does not match configured k range")
+    report = template.certify(graph)
+    if not report.theorem_d1:
+        raise ValueError("assignment template fails graph-relative unique decoding")
+    if (cfg.assignment == "disjoint-random") != report.pairwise_disjoint:
+        raise ValueError("assignment template disjoint/overlap structure differs from config")
+    if cfg.overlap is not None and (
+        report.shared_codewords != cfg.overlap.shared_codewords or
+        any(count and not cfg.overlap.support_size[0] <= size <= cfg.overlap.support_size[1]
+            for size, count in report.support_size_histogram if size > 1)
+    ):
+        raise ValueError("assignment template shared-word counts/support sizes differ from config")
+    old_words = template.global_code().words
+    words = _regime_subset(pool, len(old_words), cfg.code.type, rng, 1000).words
+    mapping = dict(zip(old_words, words))
+    return Codebooks(tuple(tuple(mapping[word] for word in book) for book in template.books))
+
+
 def assign_arbitrary_overlap(
     cfg: LanguageConfig, graph: GridGraph, pool: Code, rng: random.Random
 ) -> Codebooks:

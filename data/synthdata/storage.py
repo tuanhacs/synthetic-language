@@ -15,6 +15,7 @@ never requires re-running the (version-dependent) generators.
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -96,6 +97,17 @@ def save_dataset(
     }
     if extra:
         manifest["stats"].update(extra)
+        if extra.get("latent_pool") is not None:
+            provenance = extra["latent_pool"]
+            identity = {
+                "config_hash": manifest["config_hash"],
+                "codebook": codebook_doc,
+                "selected_samples": provenance["selection_sha256"],
+                "encoding_seed": provenance["encoding_seed"],
+            }
+            manifest["dataset_fingerprint"] = hashlib.sha256(
+                json.dumps(identity, sort_keys=True).encode()
+            ).hexdigest()
     (out / MANIFEST).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
     for name, split in splits.items():

@@ -10,6 +10,26 @@ from typing import AbstractSet, Any, Sequence
 from .config import DataConfig, TaskConfig
 from .dataset import Splits
 from .language import Language
+from .graphs import GridGraph
+
+
+@dataclass(frozen=True)
+class LatentQASample:
+    query_vertices: tuple[int, ...]
+    answer_walk: tuple[int, ...]
+    segment_cuts: tuple[int, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "query_vertices": list(self.query_vertices),
+            "answer_walk": list(self.answer_walk),
+            "segment_cuts": list(self.segment_cuts),
+        }
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "LatentQASample":
+        return LatentQASample(*(tuple(map(int, d[key])) for key in
+                                ("query_vertices", "answer_walk", "segment_cuts")))
 
 
 @dataclass(frozen=True)
@@ -24,6 +44,7 @@ class QASample:
     answer_cuts: tuple[int, ...]
     segment_cuts: tuple[int, ...]
     cot_segments_bits: tuple[str, ...] = ()
+    sample_id: str | None = None
 
     @property
     def bits(self) -> str:
@@ -55,6 +76,7 @@ class QASample:
             "answer_cuts": list(self.answer_cuts),
             "segment_cuts": list(self.segment_cuts),
             "cot_segments_bits": list(self.cot_segments_bits),
+            "sample_id": self.sample_id,
         }
 
     @staticmethod
@@ -68,6 +90,7 @@ class QASample:
             answer_cuts=tuple(int(v) for v in d["answer_cuts"]),
             segment_cuts=tuple(int(v) for v in d["segment_cuts"]),
             cot_segments_bits=tuple(str(v) for v in d.get("cot_segments_bits", ())),
+            sample_id=d.get("sample_id"),
         )
 
 
@@ -309,7 +332,7 @@ def validate_qa_answer(
 
 
 def random_simple_path(
-    language: Language,
+    language: Language | GridGraph,
     start: int,
     end: int,
     length_range: tuple[int, int],
@@ -318,6 +341,7 @@ def random_simple_path(
     allowed_vertices: AbstractSet[int] | None = None,
 ) -> tuple[int, ...] | None:
     """Find a randomized simple path whose vertex count lies in the range."""
+    graph = language.graph if isinstance(language, Language) else language
     if allowed_vertices is not None and (
         start not in allowed_vertices or end not in allowed_vertices
     ):
@@ -334,7 +358,7 @@ def random_simple_path(
                 return False
             neighbors = [
                 nxt
-                for nxt in language.graph.neighbors(v)
+                for nxt in graph.neighbors(v)
                 if allowed_vertices is None or nxt in allowed_vertices
             ]
             rng.shuffle(neighbors)
@@ -385,19 +409,19 @@ def _encode_vertices(
     return "".join(parts), tuple(cuts)
 
 
-def sample_qa(
-    language: Language,
+def sample_latent_qa(
+    graph: GridGraph,
     task: TaskConfig,
     rng: random.Random,
     require_held_out: bool | None = None,
     cross_role: str | None = None,
-) -> QASample | None:
+) -> LatentQASample | None:
     """Draw one QA example under IID, held-out, or cross-region constraints."""
     length = rng.randint(*task.query_len)
-    vertices = list(language.graph.vertices)
+    vertices = list(graph.vertices)
     allowed_path_vertices: AbstractSet[int] | None = None
     if cross_role is not None:
-        layout = cross_region_layout(language.graph.n, task.region_overlap_rows)
+        layout = cross_region_layout(graph.n, task.region_overlap_rows)
         if cross_role in ("upper", "lower"):
             region = layout.upper if cross_role == "upper" else layout.lower
             region_vertices = sorted(region)
@@ -458,7 +482,7 @@ def sample_qa(
     segments: list[tuple[int, ...]] = []
     for start, end in zip(waypoints, waypoints[1:]):
         segment = random_simple_path(
-            language,
+            graph,
             start,
             end,
             task.segment_len,
@@ -475,6 +499,16 @@ def sample_qa(
     for segment in segments[1:]:
         answer.extend(segment[1:])
         segment_cuts.append(len(answer))
+    return LatentQASample(waypoints, tuple(answer), tuple(segment_cuts))
+
+
+def encode_qa(
+    sample: LatentQASample, language: Language, task: TaskConfig, rng: random.Random,
+    sample_id: str | None = None,
+) -> QASample:
+    waypoints, answer, segment_cuts = (
+        sample.query_vertices, sample.answer_walk, sample.segment_cuts
+    )
     # Query waypoints are not graph-adjacent in general. Shared codewords would
     # therefore make the question itself ambiguous under arbitrary overlap, so
     # prompts use each vertex's guaranteed private word. Answers may use every
@@ -507,7 +541,19 @@ def sample_qa(
         answer_cuts=answer_cuts,
         segment_cuts=tuple(segment_cuts),
         cot_segments_bits=cot_segments_bits,
+        sample_id=sample_id,
     )
+
+
+def sample_qa(
+    language: Language,
+    task: TaskConfig,
+    rng: random.Random,
+    require_held_out: bool | None = None,
+    cross_role: str | None = None,
+) -> QASample | None:
+    sample = sample_latent_qa(language.graph, task, rng, require_held_out, cross_role)
+    return None if sample is None else encode_qa(sample, language, task, rng)
 
 
 def build_qa_splits(

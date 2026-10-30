@@ -482,3 +482,117 @@ Two caveats worth knowing:
 
 Adding a new **code type**, **assignment strategy** or **graph family** touches exactly one of
 these modules; everything downstream never inspects the code type.
+
+## Shared latent path-QA pools and data-size comparisons
+
+Use a codebook-independent pool when comparing prefix/suffix/UD or tuning train
+size. Query and path sampling retain the existing uniform waypoint proposals and
+randomized DFS; no pair-frequency scoring or forced histogram balancing is added.
+Rejections and semantic deduplication mean the accepted distribution is not
+necessarily uniform. Histograms measure the actual distribution.
+
+From `data/`, first generate the largest semantic pool:
+
+```bash
+python scripts/gen_qa_latent.py configs/path_qa_cross_region.yaml \
+  --out outputs/latent_cross_q2-4_seed0 \
+  --train-query-pairs 3_000_000 \
+  --valid-query-pairs 100_000 \
+  --test-query-pairs 100_000 \
+  --checkpoints 500_000 1_000_000 2_000_000 3_000_000
+```
+
+The pool contains `train.jsonl`, `valid.jsonl`, `test.jsonl` and `manifest.json`.
+Rows store `sample_id`, `query_vertices`, `answer_walk`, `segment_cuts`. Segment
+boundaries reconstruct every simple segment, including its repeated boundary
+vertex. There are no codewords. Graph and task settings come from the YAML;
+encoded budgets, assignment and code type do not enter semantic sampling.
+
+Validation is generated first, then test, then train, with independent deterministic
+RNG streams. Semantic query/final-walk duplicates are rejected within and across
+splits. For a fixed seed, graph, task and fixed validation/test budgets, generating
+500k train pairs directly produces exactly the prefix selected from a 3M pool.
+Changing validation/test budgets defines a different experiment and may change
+train because reserved eval samples are excluded. Python's process-randomized
+`hash()` is not used. This is a new versioned stream, not a recreation of old datasets.
+
+Encode a smaller train prefix and all of the fixed validation/test sets:
+
+```bash
+python scripts/gen_dataset.py configs/path_qa_cross_region.yaml \
+  --out outputs/runtime_ud_cross_500k \
+  --latent-pool outputs/latent_cross_q2-4_seed0 \
+  --train-query-pairs 500_000 \
+  --encoding-seed 0
+```
+
+Here `--train-query-pairs` counts **train only**; legacy `--pool-query-pairs` counts
+the total pool before the configured split. Do not combine them. Encoded-bit
+budgets and the YAML split percentages are ignored when reading a latent pool.
+Whole samples are retained: a query of length L contributes L-1 pair occurrences,
+so the selected train budget may exceed the target by at most `query_max - 2`.
+
+Each sample's encoding RNG is derived from `encoding_seed` and its stable ID.
+Increasing train size keeps shared samples' bits unchanged. CoT may be enabled or
+disabled without changing semantic samples or codeword choices. Changing graph,
+query length, segment constraints or split mode requires a different latent pool;
+the encoder checks these settings and source checksums.
+
+To compare prefix/suffix/UD, make YAMLs with identical graph/task settings and
+encode the same pool and prefix. They must only differ in language/encoding.
+Use the first encoded dataset's `codebook.json` as `--assignment-template` on the
+other runs to preserve every vertex's ordered codeword slots and overlap supports:
+
+```bash
+python scripts/gen_dataset.py YOUR_MATCHING_SUFFIX_CONFIG.yaml \
+  --out outputs/runtime_suffix_cross_500k \
+  --latent-pool outputs/latent_cross_q2-4_seed0 \
+  --train-query-pairs 500_000 \
+  --assignment-template outputs/runtime_ud_cross_500k/codebook.json
+```
+
+The template relabels words using a certified subset of the new codeword pool;
+it does not import the old bit strings. Assignment type and k range must match.
+
+Reports are saved in:
+
+- Latent `manifest.json`: `stats` for each split and `train_checkpoints` for requested prefixes.
+- Encoded `manifest.json`: `stats.semantic_splits`, plus `stats.latent_pool` provenance.
+
+Reports include exact query/segment/final-path vertex-length histograms, unique
+queries, pair occurrences, vertex/endpoint frequencies, and directed/undirected
+query-pair and graph-edge coverage. Frequency histograms include zero counts;
+unseen pairs/edges and individual frequencies are listed. Query-pair denominators
+follow split endpoint restrictions, rather than asserting simple-path feasibility
+for every endpoint pair. Held-out pair coverage and cross-region subgroups are
+reported separately. Graph edges are counted once on the final walk, without
+double-counting the CoT fields. Encoded bits and full-sequence lengths retain their
+existing reports.
+
+### Modal
+
+The local, git-ignored `app_path_qa.py` accepts the same workflow. For example:
+
+```bash
+python -m modal run --detach app_path_qa.py \
+  --code-type ud --assignment overlap --qa-mode cross-region \
+  --cot-mode segments --query-min 2 --query-max 4 \
+  --train-query-pairs 500_000 --latent-train-pairs 3_000_000 \
+  --valid-query-pairs 100_000 --test-query-pairs 100_000
+```
+
+Keep `--latent-train-pairs 3_000_000` fixed and change only `--train-query-pairs`
+to 1M/2M/3M or `--code-type` to reuse the same cached latent pool. Its automatic
+Volume path depends on semantic settings/seed/eval budgets/maximum pool size,
+not code type, assignment or CoT. Alternatively, pass `--latent-pool latent_pools/NAME`
+to select a Volume pool explicitly. Create it in one job before launching parallel
+encodings against the same named pool. `--assignment-template` accepts a Volume
+`codebook.json` path to preserve slot/support structure across languages.
+
+`--data-only` skips train/eval and persists histograms/coverage and codebooks under
+`/mnt/synthetic-language/data_reports/`. Ordinary training runs persist them beside
+the checkpoint. The latent pool itself is stored on the Volume. Removing
+`--data-only` enables the normal training/evaluation workflow. Push the data-package
+changes before running the local Modal launcher, since its image clones GitHub.
+The launcher pins the local Git commit so a new pushed revision refreshes the
+cached source automatically; uncommitted source changes are not uploaded.
