@@ -703,6 +703,63 @@ the same latent pool remains reusable. By default cosine LR decays over
 LR floor at step 20000 and continue at that floor until early stopping or
 the 50000-step limit. Early stopping remains active before the decay endpoint.
 
+### Paired prefix/suffix reversal experiment
+
+Add `--paired-reversal --code-types prefix suffix` to the server sweep, using
+a **new output root**. Other seed/budget/training/W&B options work as before.
+Existing latent pools can be reused. UD is rejected in this experiment mode.
+
+For each vertex and codeword slot, the suffix codeword is the bit reversal of
+the prefix word. Suffix train and validation samples are exact reversals of
+prefix samples: reverse query waypoint order, answer walk order, query/answer
+bits and boundary offsets, retaining source sample IDs for pairing. Assignment
+and overlap supports are unchanged. This is not reversal of the entire QA
+string: the query remains before the answer.
+
+Both `--cot-mode none` and `--cot-mode segments` are supported. With segments,
+reverse the order of CoT segments **and** the bits inside each segment; reverse
+the final answer separately. Repeated boundary codewords remain consistent.
+
+Suffix has two test views:
+
+- Natural: use the original test queries/walks in their original direction,
+  encoded with the reversed codebook using the ordinary deterministic encoder.
+- Reversed: exactly reverse prefix test samples, preserving sample order and
+  IDs so evaluation uses corresponding prefix/suffix examples.
+
+Natural-test semantic collisions against reversed full-pool train/validation
+are removed and counted in the manifest. The full pool is used for this check
+so the test set does not change with train subset size. No replacement test
+samples are generated. Heldout pairs must be unordered; cross-region reversal
+swaps direction while preserving the region constraints.
+
+Suffix natural reports remain in `runs/suffix_<N>pairs/eval_report.json`;
+reversed reports are in `runs/suffix_<N>pairs/eval_reversed/eval_report.json`.
+`results.json` retains natural `decodable_pct`/`success_pct` and adds a
+`reversed_test` object for suffix. With W&B enabled, metrics are separate:
+`test/natural/decodable_pct`, `test/natural/success_pct`,
+`test/reversed/decodable_pct`, `test/reversed/success_pct`.
+Prefix needs only the natural evaluation: its test is the reference for the
+reversed suffix view. Generation-cap/context length accounts for both views.
+This reverses data representations; it does not assert equal learning difficulty
+for left-to-right autoregressive models.
+
+```bash
+bash scripts/sweep_path_qa.sh \
+  --paired-reversal --code-types prefix suffix \
+  --qa-mode iid --assignment disjoint --cot-mode none \
+  --query-min 2 --query-max 4 \
+  --seed 0 --encoding-seed 0 --train-seed 0 \
+  --pool-train-pairs 3000000 --valid-query-pairs 100000 --test-query-pairs 100000 \
+  --train-min 600000 --train-max 2000000 --train-step 200000 \
+  --batch-size 64 --max-steps 50000 --lr-decay-steps 20000 \
+  --eval-every 250 --eval-batches 100 \
+  --early-stopping-patience 20 --early-stopping-min-delta 0.0001 \
+  --wandb --wandb-project synthetic-language --wandb-group iid-paired-reversal \
+  --latent-pool ./data/outputs/latent_iid_q2-4_seed0_3m \
+  --output-root ./model/outputs/path_qa_sweeps/iid_paired_reversal_none_seed0
+```
+
 ### Adding UD and W&B to the server sweep
 
 For repeated training on fixed data/codebooks, keep `--seed 0 --encoding-seed 0`

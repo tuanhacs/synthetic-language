@@ -48,6 +48,8 @@ def main() -> int:
     ap.add_argument("--device", default=None)
     ap.add_argument("--wandb-mode", choices=("disabled", "online", "offline"), default=None,
                     help="override checkpoint tracking mode, e.g. disabled for local-only evaluation")
+    ap.add_argument("--eval-label", choices=("natural", "reversed"), default=None,
+                    help="optional W&B metric namespace test/<label>, avoiding overwrites")
     args = ap.parse_args()
 
     device = resolve_device(args.device)
@@ -87,7 +89,8 @@ def main() -> int:
     print(f"checkpoint   {args.checkpoint}  (step {ckpt.get('step')})")
     print(format_report(report))
     print(f"report       {report['report_path']}")
-    log_evaluation(dataclasses.replace(cfg, eval=eval_cfg), Path(args.checkpoint), report, int(ckpt.get("step", 0)))
+    log_evaluation(dataclasses.replace(cfg, eval=eval_cfg), Path(args.checkpoint), report,
+                   int(ckpt.get("step", 0)), label=args.eval_label)
     return 0
 
 

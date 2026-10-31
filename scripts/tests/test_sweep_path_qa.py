@@ -95,6 +95,61 @@ class SweepTests(unittest.TestCase):
             self.assertEqual(text.count("model/scripts/train.py"), 8)
             self.assertIn("--assignment-template", text)
 
+    def test_paired_reversal_sweep_two_cot_modes(self):
+        for cot in ("none", "segments"):
+            with self.subTest(cot=cot), tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "sweep"
+                arguments = ["--output-root", str(output), "--pool-train-pairs", "30",
+                    "--train-min", "12", "--train-max", "20", "--train-step", "4",
+                    "--valid-query-pairs", "10", "--test-query-pairs", "10",
+                    "--qa-mode", "iid", "--assignment", "disjoint", "--cot-mode", cot,
+                    "--max-steps", "10", "--eval-samples", "1", "--paired-reversal"]
+                real_run = sweep.run
+                calls = []
+
+                def run(script, args, log, dry_run):
+                    calls.append(script)
+                    if script == "model/scripts/train.py":
+                        cfg = yaml.safe_load(Path(args[0]).read_text())
+                        directory = Path(cfg["train"]["out_dir"])
+                        directory.mkdir(parents=True)
+                        (directory / "best.pt").write_bytes(b"mock GPU")
+                    elif script == "model/scripts/evaluate.py":
+                        self.assertIn("--eval-label", args)
+                        directory = Path(args[args.index("--out-dir") + 1]) if "--out-dir" in args else Path(args[0]).parent
+                        directory.mkdir(parents=True, exist_ok=True)
+                        (directory / "eval_report.json").write_text(json.dumps({"generation": {"path_qa": {
+                            "n_samples": 1, "answer_decodable_pct": 100., "semantic_success_pct": 90.,
+                        }}}))
+                    else:
+                        real_run(script, args, log, dry_run)
+
+                with patch.object(sweep, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+                    sweep.main(arguments)
+                    rows = json.loads((output / "results.json").read_text())
+                    self.assertEqual(len(rows), 6)
+                    self.assertEqual(sum("reversed_test" in row for row in rows), 3)
+                    self.assertEqual(calls.count("model/scripts/evaluate.py"), 9)
+                    before = len(calls)
+                    sweep.main(arguments)
+                    self.assertEqual(len(calls), before)
+                reference = None
+                for size in (12, 16, 20):
+                    prefix = output / "datasets" / "prefix" / str(size)
+                    suffix = output / "datasets" / "suffix" / str(size)
+                    pbooks = json.loads((prefix / "codebook.json").read_text())["codebooks"]["books"]
+                    sbooks = json.loads((suffix / "codebook.json").read_text())["codebooks"]["books"]
+                    self.assertEqual(sbooks, [[w[::-1] for w in b] for b in pbooks])
+                    identity = tuple(sweep.digest(suffix / filename) for filename in
+                        ("valid.jsonl", "test.jsonl", "test_reversed/test.jsonl"))
+                    if reference:
+                        self.assertEqual(identity, reference)
+                    reference = identity
+
+    def test_paired_reversal_rejects_ud(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            sweep.main(["--paired-reversal", "--code-types", "ud", "--dry-run"])
+
 
 if __name__ == "__main__":
     unittest.main()

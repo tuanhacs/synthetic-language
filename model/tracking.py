@@ -102,14 +102,15 @@ class RunTracker:
             self.run.finish(exit_code=exit_code)
 
 
-def log_evaluation(cfg: Config, checkpoint: Path, report: dict, step: int) -> None:
+def log_evaluation(cfg: Config, checkpoint: Path, report: dict, step: int, label: str | None = None) -> None:
     tracker = RunTracker(cfg, out_dir=checkpoint.resolve().parent)
     try:
         generation = report.get("generation", {})
-        values = flatten_metrics(generation.get("path_qa", generation), "test")
+        prefix = f"test/{label}" if label else "test"
+        values = flatten_metrics(generation.get("path_qa", generation), prefix)
         if "path_qa" in generation:
-            values["test/decodable_pct"] = generation["path_qa"]["answer_decodable_pct"]
-            values["test/success_pct"] = generation["path_qa"]["semantic_success_pct"]
+            values[f"{prefix}/decodable_pct"] = generation["path_qa"]["answer_decodable_pct"]
+            values[f"{prefix}/success_pct"] = generation["path_qa"]["semantic_success_pct"]
         if tracker.run is not None:
             tracker.run.log({"trainer/step": step, **values})
             tracker.run.summary.update(values)

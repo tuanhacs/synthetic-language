@@ -123,6 +123,17 @@ class TrackingTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_config({"wandb": {"tags": "not-a-list"}})
 
+    def test_named_tests_do_not_overwrite_each_other(self):
+        report = {"generation": {"path_qa": {
+            "answer_decodable_pct": 99., "semantic_success_pct": 85.}}}
+        with patch.dict(sys.modules, {"wandb": self.sdk}):
+            log_evaluation(self.cfg, self.root / "best.pt", report, 100, label="natural")
+            log_evaluation(self.cfg, self.root / "best.pt", report, 100, label="reversed")
+        self.assertEqual(self.arguments[0]["id"], self.arguments[1]["id"])
+        self.assertEqual(self.created[0].summary["test/natural/success_pct"], 85.)
+        self.assertEqual(self.created[1].summary["test/reversed/success_pct"], 85.)
+        self.assertNotIn("test/success_pct", self.created[1].summary)
+
     def test_training_failure_finishes_tracking_as_failed(self):
         import train
         tracker = Mock()

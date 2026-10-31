@@ -54,6 +54,8 @@ def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--stage", choices=("pool", "all"), default="all")
     ap.add_argument("--code-types", nargs="+", choices=("prefix", "suffix", "ud"), default=["prefix", "suffix"])
+    ap.add_argument("--paired-reversal", action="store_true",
+                    help="suffix codewords/train/valid reverse prefix exactly; evaluate natural and reversed tests")
     ap.add_argument("--ud-pool", type=Path, default=ROOT / "data/codeword_pools/hard_ud_codebook_200.json")
     ap.add_argument("--pool-train-pairs", type=int, default=3_000_000)
     ap.add_argument("--train-min", type=int, default=600_000)
@@ -110,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = parser()
     args = ap.parse_args(argv)
     args.code_types = list(dict.fromkeys(args.code_types))
+    if args.paired_reversal and "ud" in args.code_types:
+        ap.error("--paired-reversal supports prefix/suffix only, not UD")
     wandb_mode = args.wandb_mode or ("online" if args.wandb else "disabled")
     if "ud" in args.code_types and args.stage != "pool" and not args.ud_pool.is_file():
         ap.error(f"UD codeword pool not found: {args.ud_pool}")
@@ -149,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
                 and not key.startswith("wandb")}
     # Preserve settings identity for existing step-only sweeps with all new
     # options disabled/defaulted.
-    for key, default in (("train_seed", None), ("lr_decay_steps", None), ("eval_batches", 20),
+    for key, default in (("paired_reversal", False), ("train_seed", None), ("lr_decay_steps", None), ("eval_batches", 20),
                          ("early_stopping_patience", 0), ("early_stopping_min_delta", 0.0)):
         if settings[key] == default:
             settings.pop(key)
@@ -227,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     # Prepare prefix once if this worker trains only suffix/UD.
     kinds = ["prefix", *[kind for kind in dict.fromkeys(args.code_types) if kind != "prefix"]]
     for kind in kinds:
-        for count in sizes if kind in args.code_types else sizes[:1]:
+        for count in sizes if kind in args.code_types or args.paired_reversal else sizes[:1]:
             name = f"{kind}_{count}pairs"
             dataset = out / "datasets" / kind / str(count)
             source_config = out / "configs" / f"data_{kind}.yaml"
@@ -236,8 +240,14 @@ def main(argv: list[str] | None = None) -> int:
                                "--encoding-seed", str(args.encoding_seed), "--entropy-samples", "0"]
             if kind != "prefix":
                 generation_args += ["--assignment-template", str(template)]
+            data_script = "data/scripts/gen_dataset.py"
+            if args.paired_reversal and kind == "suffix":
+                data_script = "data/scripts/gen_qa_reversed.py"
+                generation_args = [str(source_config), "--out", str(dataset),
+                                   "--prefix-dataset", str(out / "datasets" / "prefix" / str(count)),
+                                   "--latent-pool", str(pool), "--encoding-seed", str(args.encoding_seed)]
             if not (dataset / "manifest.json").exists():
-                run("data/scripts/gen_dataset.py", generation_args,
+                run(data_script, generation_args,
                     out / "logs" / f"{name}_data.log", args.dry_run)
             if args.dry_run:
                 context = 0  # context is measured after actual encoding
@@ -257,6 +267,14 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError(f"codebooks or fixed eval samples changed across {kind} train sizes")
                 references[kind] = reference
                 context = manifest["stats"]["recommended_context_len"]
+                if args.paired_reversal and kind == "suffix":
+                    reversal = manifest["stats"].get("reversal", {})
+                    source = out / "datasets" / "prefix" / str(count)
+                    if (reversal.get("prefix_sha256") != {
+                            filename: digest(source / filename) for filename in
+                            ("codebook.json", "train.jsonl", "valid.jsonl", "test.jsonl")} or
+                            not (dataset / "test_reversed" / "manifest.json").exists()):
+                        raise ValueError("reversed dataset/source identity mismatch or incomplete paired test")
             if kind not in args.code_types:
                 continue
             run_dir = out / "runs" / name
@@ -300,10 +318,22 @@ def main(argv: list[str] | None = None) -> int:
             if not (evaluated.exists() and (run_dir / "eval_report.json").exists()):
                 run("model/scripts/evaluate.py", [str(run_dir / "best.pt"), "--dataset", str(dataset),
                     "--device", "cuda", "--n-samples", str(args.eval_samples),
-                    "--gen-batch-size", str(args.gen_batch_size), "--temperature", str(args.temperature)],
+                    "--gen-batch-size", str(args.gen_batch_size), "--temperature", str(args.temperature),
+                    *(["--eval-label", "natural"] if args.paired_reversal else [])],
                     out / "logs" / f"{name}_eval.log", args.dry_run)
                 if not args.dry_run:
                     evaluated.write_text(json.dumps({"temperature": args.temperature}) + "\n")
+            reversed_report_dir = run_dir / "eval_reversed"
+            if args.paired_reversal and kind == "suffix":
+                reversed_marker = reversed_report_dir / "evaluation_complete.json"
+                if not (reversed_marker.exists() and (reversed_report_dir / "eval_report.json").exists()):
+                    run("model/scripts/evaluate.py", [str(run_dir / "best.pt"),
+                        "--dataset", str(dataset / "test_reversed"), "--out-dir", str(reversed_report_dir),
+                        "--eval-label", "reversed", "--device", "cuda", "--n-samples", str(args.eval_samples),
+                        "--gen-batch-size", str(args.gen_batch_size), "--temperature", str(args.temperature)],
+                        out / "logs" / f"{name}_eval_reversed.log", args.dry_run)
+                    if not args.dry_run:
+                        reversed_marker.write_text(json.dumps({"temperature": args.temperature}) + "\n")
             if not args.dry_run:
                 report = json.loads((run_dir / "eval_report.json").read_text())
                 metrics = report["generation"]["path_qa"]
@@ -322,6 +352,17 @@ def main(argv: list[str] | None = None) -> int:
                     "report": str(run_dir / "eval_report.json"),
                 }
                 train_summary_path = run_dir / "train_summary.json"
+                if args.paired_reversal:
+                    row["paired_reversal"] = True
+                    if kind == "suffix":
+                        reversed_report = json.loads((reversed_report_dir / "eval_report.json").read_text())
+                        reverse_metrics = reversed_report["generation"]["path_qa"]
+                        row["reversed_test"] = {
+                            "decodable_pct": reverse_metrics["answer_decodable_pct"],
+                            "success_pct": reverse_metrics["semantic_success_pct"],
+                            "n_samples": reverse_metrics["n_samples"],
+                            "report": str(reversed_report_dir / "eval_report.json"),
+                        }
                 train_summary = json.loads(train_summary_path.read_text()) if train_summary_path.exists() else {}
                 row.update({key: train_summary.get(key) for key in (
                     "steps", "max_steps", "stopped_early",
