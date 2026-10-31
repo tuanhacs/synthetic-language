@@ -95,7 +95,7 @@ class EarlyStoppingTests(unittest.TestCase):
             validation.assert_not_called()
 
     def test_interrupted_resume_matches_uninterrupted_weights_and_patience(self):
-        self.run_train(self.cfg("full"), [1., .95, .94])
+        self.run_train(self.cfg("full", lr_decay_steps=3), [1., .95, .94])
         save = training.save_training_checkpoint
 
         def interrupt_after_save(*args, **kwargs):
@@ -103,7 +103,7 @@ class EarlyStoppingTests(unittest.TestCase):
             if args[5] == 4:
                 raise RuntimeError("simulated interruption")
 
-        cfg = self.cfg("resumed")
+        cfg = self.cfg("resumed", lr_decay_steps=3)
         with patch.object(training, "save_training_checkpoint", side_effect=interrupt_after_save):
             with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
                 self.run_train(cfg, [1., .95])

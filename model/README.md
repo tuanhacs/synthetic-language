@@ -87,8 +87,21 @@ steps and `stop_reason` (`max_steps` or `early_stopping`).
 Changing the stopping policy requires a new output directory
 or an explicit fresh run. Existing default step-mode checkpoints remain compatible.
 
-The cosine learning-rate schedule still uses `max_steps` as its horizon. Raising
-this limit therefore changes LR decay as well as the maximum training duration.
+By default cosine decay uses `max_steps` as its horizon. Set `lr_decay_steps`
+to decouple the LR schedule from the training limit. For example:
+
+```bash
+python scripts/train.py configs/smoke.yaml --device cuda \
+  --max-steps 50000 --lr-decay-steps 20000 \
+  --eval-every 250 --early-stopping-patience 20 \
+  --early-stopping-min-delta 0.0001 --out-dir outputs/decay20k
+```
+
+LR reaches `lr * min_lr_frac` at step 20000 and stays there afterward.
+Early stopping is active throughout training, including before step 20000.
+`lr_decay_steps` is an absolute step (including warmup), must exceed warmup,
+and is saved in config/checkpoints/W&B. Changing it requires a fresh run/output
+directory; omitting it preserves the old schedule and checkpoint compatibility.
 
 ### Optional Weights & Biases
 

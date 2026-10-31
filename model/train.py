@@ -57,10 +57,11 @@ class EarlyStopping:
 
 
 def lr_at(step: int, cfg) -> float:
-    """Linear warmup then cosine decay to ``min_lr_frac`` of the peak."""
+    """Warm up, decay to the floor at the configured step, then hold it."""
     if step < cfg.warmup:
         return cfg.lr * (step + 1) / cfg.warmup
-    progress = (step - cfg.warmup) / max(1, cfg.max_steps - cfg.warmup)
+    decay_steps = cfg.lr_decay_steps if cfg.lr_decay_steps is not None else cfg.max_steps
+    progress = (step - cfg.warmup) / max(1, decay_steps - cfg.warmup)
     progress = min(1.0, progress)
     cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
     return cfg.lr * (cfg.min_lr_frac + (1.0 - cfg.min_lr_frac) * cosine)
@@ -454,6 +455,9 @@ def _resume_signature(cfg: Config) -> dict:
             )
         },
     }
+    # Omit the default field so legacy checkpoints keep their exact signature.
+    if train.lr_decay_steps is not None:
+        signature["train"]["lr_decay_steps"] = train.lr_decay_steps
     if train.early_stopping_patience:
         signature["stopping"] = {
             key: getattr(train, key) for key in (

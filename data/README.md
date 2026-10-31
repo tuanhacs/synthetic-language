@@ -698,10 +698,18 @@ step-based training remain unchanged. Patience counts validation checks; here,
 split is not used to decide when to stop. `results.json` includes actual `steps`,
 `max_steps`, `stopped_early`, `stop_reason` and best validation loss along with
 decodability/success. Use a new output root when changing batch/stopping settings;
-the same latent pool remains reusable. The cosine LR schedule still decays over
-the configured `max_steps` horizon.
+the same latent pool remains reusable. By default cosine LR decays over
+`max_steps`; pass `--lr-decay-steps 20000 --max-steps 50000` to reach the
+LR floor at step 20000 and continue at that floor until early stopping or
+the 50000-step limit. Early stopping remains active before the decay endpoint.
 
 ### Adding UD and W&B to the server sweep
+
+For repeated training on fixed data/codebooks, keep `--seed 0 --encoding-seed 0`
+and the same `--latent-pool`, and vary `--train-seed 0`, `--train-seed 1`, etc.
+Use a separate `--output-root` per training seed. Evaluation retains `--seed`,
+not `--train-seed`. Results record data/encoding/train/eval seeds. Without
+`--train-seed`, training defaults to `--seed` as before.
 
 `--code-types prefix suffix ud` runs all three encodings; the default remains
 prefix/suffix for compatibility. UD imports `data/codeword_pools/hard_ud_codebook_200.json`

@@ -90,6 +90,7 @@ class TrainConfig:
     lr: float = 3e-4
     min_lr_frac: float = 0.1  # cosine floor, as a fraction of lr
     warmup: int = 100
+    lr_decay_steps: int | None = None  # absolute step reaching LR floor; None = max_steps
     weight_decay: float = 0.1
     betas: tuple[float, float] = (0.9, 0.95)
     grad_clip: float = 1.0
@@ -105,6 +106,12 @@ class TrainConfig:
     device: str | None = None  # None = auto (cuda > mps > cpu)
 
     def __post_init__(self) -> None:
+        if self.lr_decay_steps is not None:
+            if (isinstance(self.lr_decay_steps, bool) or
+                    not isinstance(self.lr_decay_steps, int) or self.lr_decay_steps <= 0):
+                raise ConfigError("train.lr_decay_steps must be a positive integer or null")
+            if self.lr_decay_steps <= self.warmup:
+                raise ConfigError("train.lr_decay_steps must be greater than train.warmup")
         for name in ("max_steps", "batch_size", "eval_every", "eval_batches", "checkpoint_every"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:

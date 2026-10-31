@@ -34,6 +34,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("config", help="run config YAML (see configs/smoke.yaml)")
     ap.add_argument("--max-steps", type=positive_int, default=None)
+    ap.add_argument("--lr-decay-steps", type=positive_int, default=None,
+                    help="absolute step reaching minimum LR; then hold it (default: max-steps)")
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--seed", type=int, default=None)
@@ -79,6 +81,7 @@ def main() -> int:
         k: v
         for k, v in {
             "max_steps": args.max_steps,
+            "lr_decay_steps": args.lr_decay_steps,
             "batch_size": args.batch_size,
             "lr": args.lr,
             "seed": args.seed,

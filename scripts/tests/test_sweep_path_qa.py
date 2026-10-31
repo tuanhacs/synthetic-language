@@ -34,9 +34,10 @@ class SweepTests(unittest.TestCase):
                          "--train-min", "12", "--train-max", "20", "--train-step", "4",
                          "--valid-query-pairs", "10", "--test-query-pairs", "10",
                          "--qa-mode", "iid", "--assignment", "disjoint", "--cot-mode", "none",
-                         "--max-steps", "10", "--early-stopping-patience", "2", "--eval-samples", "1",
+                         "--max-steps", "10", "--lr-decay-steps", "20", "--early-stopping-patience", "2", "--eval-samples", "1",
                          "--code-types", "prefix", "suffix", "ud",
-                         "--wandb-mode", "offline", "--wandb-project", "qa-tests"]
+                         "--wandb-mode", "offline", "--wandb-project", "qa-tests",
+                         "--train-seed", "7"]
             real_run = sweep.run
             calls = []
 
@@ -45,6 +46,9 @@ class SweepTests(unittest.TestCase):
                 if script == "model/scripts/train.py":
                     cfg = yaml.safe_load(Path(args[0]).read_text())
                     self.assertEqual(cfg["train"]["max_steps"], 10)
+                    self.assertEqual(cfg["train"]["seed"], 7)
+                    self.assertEqual(cfg["eval"]["seed"], 0)
+                    self.assertEqual(cfg["train"]["lr_decay_steps"], 20)
                     self.assertEqual(cfg["train"]["early_stopping_patience"], 2)
                     self.assertEqual(cfg["wandb"]["mode"], "offline")
                     self.assertEqual(cfg["wandb"]["project"], "qa-tests")
@@ -69,6 +73,7 @@ class SweepTests(unittest.TestCase):
                 self.assertEqual(len(summary), 9)
                 self.assertTrue(all(row["stopped_early"] for row in summary))
                 self.assertTrue(all(row["max_steps"] == 10 for row in summary))
+                self.assertTrue(all(row["train_seed"] == 7 and row["data_seed"] == 0 for row in summary))
                 count = len(calls)
                 self.assertEqual(sweep.main(arguments), 0)
                 self.assertEqual(len(calls), count)

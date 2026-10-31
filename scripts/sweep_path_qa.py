@@ -75,11 +75,15 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--k-max", type=int, default=4)
     ap.add_argument("--shared-codewords", type=int, default=12)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--train-seed", type=int, default=None,
+                    help="training RNG seed only; data/codebooks/evaluation retain --seed")
     ap.add_argument("--encoding-seed", type=int, default=0)
     ap.add_argument("--n-layers", type=int, default=10)
     ap.add_argument("--d-model", type=int, default=512)
     ap.add_argument("--n-heads", type=int, default=8)
     ap.add_argument("--max-steps", type=int, default=20_000)
+    ap.add_argument("--lr-decay-steps", type=int, default=None,
+                    help="reach minimum LR at this absolute step, then hold (default: max-steps)")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--eval-every", type=int, default=250)
@@ -124,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("lr and temperature must be positive")
     if args.eval_batches < 1 or args.early_stopping_patience < 0:
         ap.error("validation intervals/batches must be positive and patience non-negative")
+    if args.lr_decay_steps is not None and args.lr_decay_steps <= min(100, args.max_steps):
+        ap.error("lr-decay-steps must be greater than warmup (min(100, max-steps))")
     if not 0 <= args.early_stopping_min_delta < float("inf"):
         ap.error("early stopping min-delta must be finite and non-negative")
     sizes = list(range(args.train_min, args.train_max + 1, args.train_step))
@@ -143,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                 and not key.startswith("wandb")}
     # Preserve settings identity for existing step-only sweeps with all new
     # options disabled/defaulted.
-    for key, default in (("eval_batches", 20),
+    for key, default in (("train_seed", None), ("lr_decay_steps", None), ("eval_batches", 20),
                          ("early_stopping_patience", 0), ("early_stopping_min_delta", 0.0)):
         if settings[key] == default:
             settings.pop(key)
@@ -261,7 +267,8 @@ def main(argv: list[str] | None = None) -> int:
                 "train": {"max_steps": args.max_steps, "batch_size": args.batch_size,
                           "lr": args.lr, "warmup": min(100, args.max_steps), "log_every": 50,
                           "eval_every": args.eval_every, "checkpoint_every": args.checkpoint_every,
-                          "seed": args.seed, "resume": "auto", "device": "cuda", "out_dir": str(run_dir)},
+                          "seed": args.seed if args.train_seed is None else args.train_seed,
+                          "resume": "auto", "device": "cuda", "out_dir": str(run_dir)},
                 "eval": {"n_samples": args.eval_samples, "gen_batch_size": args.gen_batch_size,
                          "temperature": args.temperature, "seed": args.seed, "max_len": context},
             }
@@ -274,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
                         *args.wandb_tags, kind, args.qa_mode, args.assignment, args.cot_mode,
                     ])),
                 }
-            for key, default in (("eval_batches", 20),
+            for key, default in (("lr_decay_steps", None), ("eval_batches", 20),
                                  ("early_stopping_patience", 0), ("early_stopping_min_delta", 0.0)):
                 if getattr(args, key) != default:
                     model_config["train"][key] = getattr(args, key)
@@ -302,6 +309,9 @@ def main(argv: list[str] | None = None) -> int:
                 metrics = report["generation"]["path_qa"]
                 row = {
                     "code_type": kind, "train_pairs_requested": count,
+                    "data_seed": args.seed, "encoding_seed": args.encoding_seed,
+                    "train_seed": args.seed if args.train_seed is None else args.train_seed,
+                    "eval_seed": args.seed,
                     "train_pairs_actual": manifest["stats"]["splits"]["train"]["query_pair_occurrences"],
                     "qa_mode": args.qa_mode, "assignment": args.assignment,
                     "cot_mode": args.cot_mode, "query_len": [args.query_min, args.query_max],
