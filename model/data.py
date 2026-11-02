@@ -8,13 +8,13 @@ Two modes, mirroring the data side:
 * **streaming** — wrap :func:`synthdata.dataset.stream` into an infinite batch
   iterator, for later infinite-data scaling runs.
 
-Windows are ``context_len + 1`` tokens long, so a batch yields inputs ``w[:, :-1]``
-and targets ``w[:, 1:]`` of exactly ``context_len`` positions. For path-QA,
-query and separator targets are masked and loss is computed only on answer/EOS.
+Storage windows are ``context_len + 1`` tokens long. LM uses shifted fixed-size
+windows. QA stores only whole samples, then unpacks selected windows into
+independent batch rows with dynamic right padding. Query/first separator targets
+are masked; CoT, final-answer and EOS targets are supervised.
 
-**Loss masking.** Targets equal to PAD (never present with ``drop_last``) or BOS are
-excluded from the loss. Sentences are concatenated as in the CFG paper, so no masking
-happens across sentence boundaries; BOS is dropped only because it is fully
+**Loss masking.** Targets equal to PAD or BOS are excluded from the loss. LM
+sentences are concatenated as in the CFG paper; BOS is dropped because it is fully
 predictable (it always follows EOS) and would otherwise bias the reported
 bits/token *below* the manifest's entropy floor, which is averaged over
 ``bits + EOS`` tokens only. Excluding it makes the reported loss directly
@@ -35,7 +35,7 @@ import _paths  # noqa: F401  (sys.path shim for synthdata; must precede synthdat
 from synthdata.dataset import stream
 from synthdata.language import Language, Sample
 from synthdata.storage import load_dataset
-from synthdata.tokenizer import BitTokenizer
+from synthdata.tokenizer import BitTokenizer, QA_PACKING_VERSION
 
 #: Target token ids that never contribute to the loss.
 IGNORE_TARGETS = (BitTokenizer.PAD, BitTokenizer.BOS)
@@ -45,10 +45,12 @@ IGNORE_INDEX = -100
 def pack_windows(
     samples: Sequence, context_len: int, tokenizer: BitTokenizer | None = None
 ) -> torch.Tensor:
-    """Pack sentences into a ``(n_windows, context_len + 1)`` int64 tensor."""
+    """Pack LM streams or intact QA samples into fixed-width storage rows."""
     tok = tokenizer or BitTokenizer()
     windows = list(tok.pack(samples, context_len=context_len + 1, drop_last=True))
     if not windows:
+        if tok.include_separator:
+            return torch.empty((0, context_len + 1), dtype=torch.long)
         raise ValueError(
             f"not enough data to fill one window of {context_len + 1} tokens "
             f"({len(samples)} sentences)"
@@ -59,8 +61,16 @@ def pack_windows(
 def make_targets(
     windows: torch.Tensor, tokenizer: BitTokenizer | None = None
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """``(inputs, targets)`` from packed windows, with ignored targets masked out."""
+    """Build targets; QA packs become independent, dynamically padded examples.
+
+    Samples occupy different batch rows, so ordinary causal SDPA cannot attend
+    across samples and each sample's RoPE positions restart at zero. No dense
+    block attention mask is needed. Query/first-separator, BOS and PAD loss is
+    ignored; all CoT/final-answer/EOS targets remain supervised.
+    """
     tok = tokenizer or BitTokenizer()
+    if tok.include_separator:
+        windows = _isolate_qa_samples(windows, tok)
     raw_inputs, raw_targets = windows[:, :-1], windows[:, 1:].clone()
     marked = raw_targets >= tok.vocab_size
     inputs = raw_inputs.remainder(tok.vocab_size)
@@ -71,6 +81,37 @@ def make_targets(
     mask |= marked
     targets[mask] = IGNORE_INDEX
     return inputs, targets
+
+
+def _isolate_qa_samples(windows: torch.Tensor, tok: BitTokenizer) -> torch.Tensor:
+    """Unpack complete QA examples before model execution (normally on CPU)."""
+    examples = []
+    for row in windows:
+        plain = row.remainder(tok.vocab_size)
+        starts = (plain == tok.BOS).nonzero().flatten().tolist()
+        ends = (plain == tok.EOS).nonzero().flatten().tolist()
+        if len(starts) != len(ends) or not starts:
+            raise ValueError("QA batch must contain complete BOS...EOS samples, not split windows")
+        previous = 0
+        for start, end in zip(starts, ends):
+            if start < previous or end < start or bool((plain[previous:start] != tok.PAD).any()):
+                raise ValueError("malformed or split QA sample in packed window")
+            separators = (plain[start:end + 1] == tok.SEP).nonzero().flatten()
+            if not len(separators):
+                raise ValueError("QA sample has no query/answer separator")
+            seq = row[start:end + 1].clone()
+            first_sep = int(separators[0])
+            seq[:first_sep + 1] = seq[:first_sep + 1].remainder(tok.vocab_size) + tok.vocab_size
+            examples.append(seq)
+            previous = end + 1
+        if bool((plain[previous:] != tok.PAD).any()):
+            raise ValueError("incomplete QA sample at the end of a packed window")
+    if not examples:
+        raise ValueError("empty QA batch")
+    padded = windows.new_full((len(examples), max(len(seq) for seq in examples)), tok.PAD)
+    for index, seq in enumerate(examples):
+        padded[index, :len(seq)] = seq
+    return padded
 
 
 @dataclass
@@ -120,6 +161,8 @@ def load_frozen(dataset_dir: str | Path, context_len: int) -> PackedData:
     tok = BitTokenizer(include_separator=qa)
 
     def pack_or_empty(samples: tuple[Sample, ...]) -> torch.Tensor:
+        if qa:
+            return pack_windows(samples, context_len, tok)
         try:
             return pack_windows(samples, context_len, tok)
         except ValueError:
@@ -177,6 +220,8 @@ def load_frozen_train_valid(dataset_dir: str | Path, context_len: int) -> Packed
     try:
         valid = pack_windows(ds.splits.valid, context_len, tok)
     except ValueError:
+        if qa:
+            raise
         valid = empty
     return PackedData(
         dataset_dir=path,
@@ -194,7 +239,11 @@ def load_frozen_train_valid(dataset_dir: str | Path, context_len: int) -> Packed
 
 
 class BatchSampler:
-    """Random-batch sampler over packed windows, with its own seeded generator."""
+    """Sample storage windows; QA batches expand to independent example rows.
+
+    ``batch_size`` remains the number of sampled storage windows, not the number
+    of QA examples after unpacking. Validation uses the same isolation path.
+    """
 
     def __init__(
         self,
@@ -215,9 +264,14 @@ class BatchSampler:
 
     def state_dict(self) -> dict:
         """State needed to draw exactly the same future frozen-data batches."""
-        return {"generator_state": self.generator.get_state()}
+        state = {"generator_state": self.generator.get_state()}
+        if self.tokenizer.include_separator:
+            state["qa_packing"] = QA_PACKING_VERSION
+        return state
 
     def load_state_dict(self, state: dict) -> None:
+        if self.tokenizer.include_separator and state.get("qa_packing") != QA_PACKING_VERSION:
+            raise ValueError("QA sampler packing changed; use a new training output directory")
         generator_state = state["generator_state"]
         if not isinstance(generator_state, torch.Tensor):
             generator_state = torch.as_tensor(generator_state, dtype=torch.uint8)

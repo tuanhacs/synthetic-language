@@ -263,16 +263,34 @@ The outputs are `cross_region_analysis.json` and
 
 ## 5. Data pipeline (`data.py`)
 
-**Frozen mode** — `synthdata.storage.load_dataset` → `BitTokenizer.pack` (synthdata's
-own packer) into windows of `context_len + 1` tokens, so a batch yields inputs
-`w[:, :-1]` and targets `w[:, 1:]` covering exactly `context_len` positions. Sentences
-are concatenated and *not* aligned to window boundaries, as in the CFG paper.
-`BatchSampler` draws uniform random windows from its own seeded `torch.Generator`.
+**Frozen mode** — `synthdata.storage.load_dataset` → `BitTokenizer.pack` into
+storage windows of `context_len + 1` tokens. `BatchSampler` draws uniform random
+windows from its own seeded `torch.Generator`.
 
-For path-QA, model inputs remain ordinary six-token IDs. Targets through the
-first `_` are ignored; all later tokens and EOS contribute to the loss. The target mask is
-preserved even when packed windows cross example boundaries. Streaming mode is
-currently rejected for path-QA.
+**Path-QA:** next-fit packing keeps every `BOS + query + _ + completion + EOS`
+sample whole. A sample that does not fit starts a new storage window; remaining
+space is PAD-filled, including the last partial window (no samples are dropped).
+An oversized sample raises instead of silently splitting/truncating it.
+
+Before model execution, selected QA windows are unpacked into **one sample per
+batch row**, dynamically right-padded to the longest selected sample. Thus no
+sample can attend to any other sample, all answer tokens retain their query,
+and RoPE positions start at zero per sample. Ordinary causal SDPA is unchanged;
+no quadratic block mask is needed. Targets through the first `_` and padding
+are ignored; all CoT/final-answer tokens and EOS contribute to loss. This applies
+to training, validation and sentence scoring, for both no-CoT and segments.
+
+`batch_size` and `eval_batches` still count storage windows: the number of QA
+example rows per forward may be larger. Context length can still change packing
+and the amount of data sampled per step; it no longer causes missing-query
+supervision. Streaming mode remains unsupported for QA.
+
+QA training checkpoints and summaries record `whole-sample-isolated-v1`.
+Old split-window QA checkpoints cannot resume under the new pipeline, and the
+sweep rejects old completion markers. **Use a new `--output-root`/`out_dir` for
+new training.** Existing JSONL datasets/latent pools remain reusable; old model
+checkpoints can still be loaded for generation/evaluation. LM packing/resume
+behavior and generation KV caching are unchanged.
 
 **Streaming mode** — `stream_batches` wraps `synthdata.dataset.stream` into an
 infinite batch iterator, packed identically. For later infinite-data scaling runs;
@@ -281,12 +299,12 @@ directory is still required (and still loaded): it supplies the language, the
 manifest's entropy floor, and the frozen valid/test splits used for evaluation.
 
 **Loss masking.** Targets equal to `PAD` or `BOS` are excluded (`ignore_index`).
-`PAD` never occurs in packed windows (`drop_last=True`) but does in sentence-aligned
-batches. `BOS` is excluded because it is *fully predictable* (it always follows
+`PAD` occurs in QA packs and sentence-aligned batches, but not full LM stream
+windows. For LM, `BOS` is excluded because it is *fully predictable* (it always follows
 `EOS`): counting it would push the reported bits/token **below** the manifest's
 entropy floor, which is averaged over `bits + EOS` tokens only. Excluding it makes
-every number in this package directly comparable to the floor. No masking happens
-across sentence boundaries — predicting across a boundary is a real part of the task.
+LM loss directly comparable to the floor. LM retains cross-sentence context;
+QA examples are attention-isolated and its answer-conditioned entropy floor is undefined.
 
 ---
 

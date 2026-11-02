@@ -24,6 +24,7 @@ import torch.nn.functional as F
 
 from config import Config
 from data import (
+    QA_PACKING_VERSION,
     BatchSampler,
     IGNORE_INDEX,
     PackedData,
@@ -230,6 +231,7 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
             "max_steps": cfg.train.max_steps,
             "stopped_early": early_stopping.stopped,
             "stop_reason": "early_stopping" if early_stopping.stopped else "max_steps",
+            "qa_packing": QA_PACKING_VERSION if data.tokenizer.include_separator else None,
         }
         summary_path = out_dir / "train_summary.json"
         if not summary_path.exists():
@@ -346,6 +348,7 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
         "max_steps": cfg.train.max_steps,
         "stopped_early": early_stopping.stopped,
         "stop_reason": "early_stopping" if early_stopping.stopped else "max_steps",
+        "qa_packing": QA_PACKING_VERSION if data.tokenizer.include_separator else None,
         "early_stopping_bad_checks": early_stopping.bad_checks,
         "first_train_bits_per_token": first_train_bits,
         "last_train_bits_per_token": last_train_bits,
@@ -487,6 +490,7 @@ def save_training_checkpoint(
             "optimizer": optimizer.state_dict(),
             "config": cfg.to_dict(),
             "resume_signature": _resume_signature(cfg),
+            "qa_packing": (QA_PACKING_VERSION if data.tokenizer.include_separator else None),
             "dataset_config_hash": data.manifest.get("dataset_fingerprint", data.manifest.get("config_hash")),
             "step": step,
             "best_valid_bits_per_token": best_valid,
@@ -501,6 +505,12 @@ def save_training_checkpoint(
 def _validate_resume_checkpoint(checkpoint: dict, cfg: Config, data: PackedData) -> None:
     if checkpoint.get("checkpoint_version") != 1:
         raise ValueError("latest.pt is not a supported resumable checkpoint")
+    if data.tokenizer.include_separator and checkpoint.get("qa_packing") != QA_PACKING_VERSION:
+        raise ValueError(
+            "latest.pt uses the old split-window QA packing; the new QA pipeline "
+            "keeps samples whole and attention-isolated. Use a new out_dir "
+            "(or train.resume: never for an intentional fresh run)."
+        )
     if checkpoint.get("resume_signature") != _resume_signature(cfg):
         raise ValueError(
             "latest.pt is incompatible with the current model/training config; "

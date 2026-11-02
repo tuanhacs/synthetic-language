@@ -10,6 +10,8 @@ from typing import Iterable, Iterator, Sequence
 
 from .language import Sample
 
+QA_PACKING_VERSION = "whole-sample-isolated-v1"
+
 
 class BitTokenizer:
     """Maps bit strings to token ids and packs sentences into context windows."""
@@ -62,14 +64,17 @@ class BitTokenizer:
         context_len: int,
         drop_last: bool = True,
     ) -> Iterator[list[int]]:
-        """Concatenate ``BOS + bits + EOS`` streams and cut fixed-size windows.
+        """Pack ``BOS + bits + EOS`` into fixed-size windows.
 
-        Sentences are not aligned to window boundaries (as in the CFG paper), so
-        a window may start mid-sentence. A trailing partial window is dropped
-        (``drop_last=True``) or PAD-filled.
+        LM uses concatenate-then-split. Separator-enabled QA keeps every sample
+        intact using next-fit packing, pads unused space, and retains the final
+        pack regardless of ``drop_last``. Oversized QA samples raise, never split.
         """
         if context_len < 2:
             raise ValueError("context_len must be >= 2")
+        if self.include_separator:
+            yield from self._pack_qa(samples, context_len)
+            return
         buffer: list[int] = []
         for item in samples:
             bits = item if isinstance(item, str) else item.bits
@@ -90,6 +95,26 @@ class BitTokenizer:
                 yield buffer[:context_len]
                 del buffer[:context_len]
         if buffer and not drop_last:
+            yield buffer + [self.PAD] * (context_len - len(buffer))
+
+    def _pack_qa(self, samples: Iterable, context_len: int) -> Iterator[list[int]]:
+        """Whole-example, order-preserving packing with answer-only loss marks."""
+        buffer: list[int] = []
+        for item in samples:
+            ids = self.encode(item if isinstance(item, str) else item.bits)
+            if len(ids) > context_len:
+                raise ValueError(
+                    f"QA sample needs {len(ids)} tokens including BOS/EOS, "
+                    f"but packing window holds {context_len}; increase model.context_len"
+                )
+            sep = ids.index(self.SEP)
+            ids = [token + self.vocab_size if i <= sep else token
+                   for i, token in enumerate(ids)]
+            if buffer and len(buffer) + len(ids) > context_len:
+                yield buffer + [self.PAD] * (context_len - len(buffer))
+                buffer = []
+            buffer.extend(ids)
+        if buffer:
             yield buffer + [self.PAD] * (context_len - len(buffer))
 
     def pack_all(self, samples: Sequence[Sample | str], context_len: int) -> list[list[int]]:

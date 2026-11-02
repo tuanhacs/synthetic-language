@@ -199,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     from synthdata.config import parse_config
     from synthdata.graphs import graph_from_spec
     from synthdata.qa_latent import semantic_config
+    from synthdata.tokenizer import QA_PACKING_VERSION
     canonical = parse_config(data_config("prefix"))
     for kind in args.code_types:
         parse_config(data_config(kind))
@@ -306,11 +307,17 @@ def main(argv: list[str] | None = None) -> int:
             if not args.dry_run:
                 write_config(model_path, model_config)
             trained = run_dir / "training_complete.json"
+            if trained.exists() and json.loads(trained.read_text()).get("qa_packing") != QA_PACKING_VERSION:
+                raise ValueError(
+                    f"completed run {run_dir} predates whole-sample QA packing; "
+                    "choose a new --output-root (the latent pool can be reused)"
+                )
             if not (trained.exists() and (run_dir / "best.pt").exists()):
                 run("model/scripts/train.py", [str(model_path)], out / "logs" / f"{name}_train.log", args.dry_run)
                 if not args.dry_run:
                     summary_path = run_dir / "train_summary.json"
                     completion = json.loads(summary_path.read_text()) if summary_path.exists() else {"max_steps": args.max_steps}
+                    completion["qa_packing"] = QA_PACKING_VERSION
                     trained.write_text(json.dumps(completion) + "\n")
             else:
                 print(f"Training already completed: {name}")
@@ -366,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
                 train_summary = json.loads(train_summary_path.read_text()) if train_summary_path.exists() else {}
                 row.update({key: train_summary.get(key) for key in (
                     "steps", "max_steps", "stopped_early",
-                    "stop_reason", "best_valid_bits_per_token",
+                    "stop_reason", "best_valid_bits_per_token", "qa_packing",
                 )})
                 summary_path = out / "results.json"
                 summary = json.loads(summary_path.read_text()) if summary_path.exists() else []

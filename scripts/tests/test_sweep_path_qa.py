@@ -77,6 +77,12 @@ class SweepTests(unittest.TestCase):
                 count = len(calls)
                 self.assertEqual(sweep.main(arguments), 0)
                 self.assertEqual(len(calls), count)
+                marker = output / "runs" / "prefix_12pairs" / "training_complete.json"
+                legacy = json.loads(marker.read_text())
+                legacy.pop("qa_packing")
+                marker.write_text(json.dumps(legacy))
+                with self.assertRaisesRegex(ValueError, "predates whole-sample QA packing"):
+                    sweep.main(arguments)
             reference_ids = None
             for kind in ("prefix", "suffix", "ud"):
                 rows = [json.loads(line) for line in (output / "datasets" / kind / "12" / "train.jsonl").read_text().splitlines()]
