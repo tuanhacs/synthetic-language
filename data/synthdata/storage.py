@@ -108,10 +108,19 @@ def save_dataset(
             manifest["dataset_fingerprint"] = hashlib.sha256(
                 json.dumps(identity, sort_keys=True).encode()
             ).hexdigest()
+    if cfg.data.train_noise is not None:
+        manifest["files"]["train_clean"] = "train.clean.jsonl"
+        manifest["dataset_fingerprint"] = hashlib.sha256(json.dumps({
+            "base": manifest.get("dataset_fingerprint", manifest["config_hash"]),
+            "train_noise": manifest["stats"].get("train_noise"),
+        }, sort_keys=True).encode()).hexdigest()
     (out / MANIFEST).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
     for name, split in splits.items():
         _write_jsonl(out / SPLIT_FILES[name], split)
+    if cfg.data.train_noise is not None:
+        from .qa_noise import clean_sample
+        _write_jsonl(out / "train.clean.jsonl", (clean_sample(s) for s in splits.train))
     return out
 
 

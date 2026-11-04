@@ -20,7 +20,8 @@ from data import (BatchSampler, IGNORE_INDEX, QA_PACKING_VERSION, make_targets,
 from evals import masked_ce
 from model import build_model
 from synthdata.codebooks import Codebooks
-from synthdata.config import TaskConfig
+from synthdata.config import TaskConfig, TrainNoiseConfig
+from synthdata.qa_noise import apply_train_noise
 from synthdata.graphs import make_grid
 from synthdata.language import Language
 from synthdata.qa import LatentQASample, encode_qa
@@ -123,6 +124,21 @@ class QAPackingTests(unittest.TestCase):
         tokens = [t for sample in samples for t in tok.encode(sample)]
         self.assertEqual(list(tok.pack(samples, 6)),
                          [tokens[i:i + 6] for i in range(0, len(tokens) - 5, 6)])
+
+    def test_noise_is_used_by_inputs_and_targets_with_query_mask_preserved(self):
+        for cot in ("none", "segments"):
+            for scope in ("query", "answer", "both"):
+                with self.subTest(cot=cot, scope=scope):
+                    noisy, _ = apply_train_noise(self.samples(cot),
+                        TrainNoiseConfig(sample_rate=1, scope=scope))
+                    context = sum(len(s.bits) + 2 for s in noisy)
+                    inputs, targets = make_targets(pack_windows(noisy, context, self.tok), self.tok)
+                    for i, s in enumerate(noisy):
+                        seq = self.tok.encode(s.noised_bits)
+                        self.assertEqual(inputs[i, :len(seq) - 1].tolist(), seq[:-1])
+                        completion = s.noised_bits[len(s.query_bits) + 1:]
+                        scored = targets[i][targets[i] != IGNORE_INDEX].tolist()
+                        self.assertEqual(scored, self.tok.encode(completion, bos=False))
 
     def test_sampler_and_training_resume_exactly_and_reject_legacy_packing(self):
         with tempfile.TemporaryDirectory() as temp:

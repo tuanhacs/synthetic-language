@@ -68,6 +68,12 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--cot-mode", choices=("none", "segments"), default="segments")
     ap.add_argument("--allow-repeats", action="store_true",
                     help="allow cycles inside QA segments; semantic/CoT success does not require simple paths")
+    ap.add_argument("--train-noise", action="store_true", help="enable train-only occurrence noise (default rate 0.05)")
+    ap.add_argument("--train-noise-rate", type=float, default=None, help="fraction of train examples; also enables noise")
+    ap.add_argument("--train-noise-scope", choices=("query", "answer", "both"), default="both")
+    ap.add_argument("--train-noise-codewords", type=int, nargs=2, default=[1, 3], metavar=("MIN", "MAX"))
+    ap.add_argument("--train-noise-bits", type=int, nargs=2, default=[1, 2], metavar=("MIN", "MAX"))
+    ap.add_argument("--train-noise-seed", type=int, default=0)
     ap.add_argument("--grid-size", type=int, default=6)
     ap.add_argument("--query-min", type=int, default=2)
     ap.add_argument("--query-max", type=int, default=4)
@@ -138,6 +144,11 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("lr-decay-steps must be greater than warmup (min(100, max-steps))")
     if not 0 <= args.early_stopping_min_delta < float("inf"):
         ap.error("early stopping min-delta must be finite and non-negative")
+    train_noise = None
+    if args.train_noise or args.train_noise_rate is not None:
+        train_noise = {"sample_rate": args.train_noise_rate if args.train_noise_rate is not None else 0.05,
+                       "scope": args.train_noise_scope, "codeword_occurrences": args.train_noise_codewords,
+                       "bit_flips_per_occurrence": args.train_noise_bits, "seed": args.train_noise_seed}
     sizes = list(range(args.train_min, args.train_max + 1, args.train_step))
     # Always establish prefix as the assignment-slot reference, even for a
     # suffix/UD-only worker. Independent workers can share a pre-created pool.
@@ -153,6 +164,11 @@ def main(argv: list[str] | None = None) -> int:
                 for key, value in vars(args).items()
                 if key not in ("stage", "dry_run", "output_root", "code_types", "ud_pool")
                 and not key.startswith("wandb")}
+    for key in list(settings):
+        if key.startswith("train_noise"):
+            settings.pop(key)
+    if train_noise is not None:
+        settings["train_noise"] = train_noise
     # Preserve settings identity for existing step-only sweeps with all new
     # options disabled/defaulted.
     for key, default in (("allow_repeats", False), ("paired_reversal", False), ("train_seed", None), ("lr_decay_steps", None), ("eval_batches", 20),
@@ -193,10 +209,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.assignment == "overlap":
             language["overlap"] = {"support_size": [2, 4], "shared_codewords": args.shared_codewords,
                                    "max_restarts": 100, "candidate_trials": 10_000}
-        return {"language": language,
+        result = {"language": language,
                 "data": {"seed": args.seed, "context_len": "auto",
                          "pool_query_pairs": args.pool_train_pairs + args.valid_query_pairs + args.test_query_pairs},
                 "task": task}
+        if train_noise is not None:
+            result["data"]["train_noise"] = train_noise
+        return result
 
     # Validate before starting an expensive pool generation.
     sys.path.insert(0, str(ROOT / "data"))
@@ -364,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
                     "report": str(run_dir / "eval_report.json"),
                 }
                 train_summary_path = run_dir / "train_summary.json"
+                if train_noise is not None:
+                    row["train_noise"] = manifest["stats"]["train_noise"]
                 if args.paired_reversal:
                     row["paired_reversal"] = True
                     if kind == "suffix":

@@ -185,6 +185,43 @@ class SweepTests(unittest.TestCase):
             row = json.loads((output / "results.json").read_text())[0]
             self.assertTrue(row["allow_repeats"])
 
+    def test_train_noise_with_paired_reversal_and_clean_evaluation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "noise-sweep"
+            arguments = ["--output-root", str(output), "--paired-reversal", "--train-noise-rate", "0.5",
+                "--pool-train-pairs", "30", "--train-min", "20", "--train-max", "20",
+                "--valid-query-pairs", "10", "--test-query-pairs", "10",
+                "--qa-mode", "iid", "--assignment", "disjoint", "--cot-mode", "segments",
+                "--max-steps", "10", "--eval-samples", "1"]
+            real_run = sweep.run
+            def run(script, args, log, dry_run):
+                if script == "model/scripts/train.py":
+                    cfg = yaml.safe_load(Path(args[0]).read_text())
+                    directory = Path(cfg["train"]["out_dir"])
+                    directory.mkdir(parents=True)
+                    (directory / "best.pt").write_bytes(b"fake GPU")
+                elif script == "model/scripts/evaluate.py":
+                    directory = Path(args[args.index("--out-dir") + 1]) if "--out-dir" in args else Path(args[0]).parent
+                    directory.mkdir(exist_ok=True, parents=True)
+                    (directory / "eval_report.json").write_text(json.dumps({"generation": {"path_qa": {
+                        "n_samples": 1, "answer_decodable_pct": 100., "semantic_success_pct": 100.,
+                    }}}))
+                else:
+                    real_run(script, args, log, dry_run)
+            with patch.object(sweep, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+                sweep.main(arguments)
+                sweep.main(arguments)
+            rows = json.loads((output / "results.json").read_text())
+            self.assertTrue(all(r["train_noise"]["corrupted_samples"] > 0 for r in rows))
+            for kind in ("prefix", "suffix"):
+                directory = output / "datasets" / kind / "20"
+                noisy = [json.loads(line) for line in (directory / "train.jsonl").read_text().splitlines()]
+                self.assertEqual(sum("noised_bits" in r for r in noisy), int(len(noisy) * .5))
+                self.assertTrue((directory / "train.clean.jsonl").exists())
+                for name in ("valid", "test"):
+                    clean = [json.loads(line) for line in (directory / f"{name}.jsonl").read_text().splitlines()]
+                    self.assertTrue(all("noised_bits" not in r for r in clean))
+
 
 if __name__ == "__main__":
     unittest.main()

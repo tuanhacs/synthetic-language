@@ -792,6 +792,64 @@ a new output root for `--allow-repeats`; an old simple-path pool cannot be reuse
 as repeat-enabled training data.** No model architecture/tokenizer changes are
 needed.
 
+### Train-only codeword-occurrence noise
+
+Add `--train-noise` to the server sweep to corrupt 5% of **training examples**
+(not query pairs or bits). This is a fixed offline corruption, not re-sampled
+every training step. Generation/encoding/splitting runs normally first; noise
+uses a separate seed afterward. Codebooks, clean references, valid and test stay
+unchanged. The existing latent pool can be reused, but use a new output root.
+
+Equivalent data YAML:
+
+```yaml
+data:
+  # Keep the normal budget/seed/context settings here too.
+  train_noise:
+    sample_rate: 0.05
+    scope: both                       # query | answer | both
+    codeword_occurrences: [1, 3]
+    bit_flips_per_occurrence: [1, 2]
+    seed: 0
+```
+
+Selection uses deterministic SHA256 ranks, selecting
+`floor(number_of_train_examples * sample_rate)` examples without replacement.
+Each selected example chooses 1–3 distinct codeword **occurrences**, then flips
+1–2 distinct bit positions inside each occurrence (`0 <-> 1`). Counts are clipped
+to available occurrences/word length. Another occurrence of the same codeword,
+even in the same example, is unchanged unless independently selected. Flips may
+accidentally produce another valid codeword; such flips are not rejected.
+
+`scope: both` samples occurrences across query and final answer; it does not
+force edits in both fields. `answer` means **final answer only**: segment-CoT
+fields stay clean, so noisy final targets can intentionally disagree with clean
+CoT on corrupted examples. Separators, length, cuts, vertices and reference walks
+are never changed. Both no-CoT and segments, simple/repeat-enabled routes,
+disjoint/overlap assignment, and all QA split modes use the same transform.
+
+`train.jsonl` retains clean query/answer fields and, for corrupted examples,
+adds `noised_bits` and `noise_edits` (field, occurrence index, bit indices).
+Training consumes `noised_bits`; the original clean stream is also saved as
+`train.clean.jsonl`. Manifest `stats.train_noise`, console output, sweep
+`results.json` and W&B dataset config record actual corrupted examples,
+occurrences, bit counts, seed and a corruption checksum. Fingerprints distinguish
+noise settings/content for resume safety. With paired reversal, suffix training
+is the exact reversal of noisy prefix training, including mirrored edit positions.
+
+Optional sweep overrides:
+
+```bash
+--train-noise-rate 0.05 --train-noise-scope both \
+--train-noise-codewords 1 3 --train-noise-bits 1 2 --train-noise-seed 0
+```
+
+Passing `--train-noise-rate` also enables noise. Disabled by default, with legacy
+clean configs/JSON serialization unchanged. Exact per-subset fractions mean
+noise membership may change when the requested training subset size changes;
+the clean latent subsets remain nested and edits for shared selected IDs remain
+reproducible at the same encoding. The noise seed is independent of train seeds.
+
 ### Adding UD and W&B to the server sweep
 
 For repeated training on fixed data/codebooks, keep `--seed 0 --encoding-seed 0`

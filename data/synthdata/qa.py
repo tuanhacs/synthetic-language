@@ -46,9 +46,15 @@ class QASample:
     segment_cuts: tuple[int, ...]
     cot_segments_bits: tuple[str, ...] = ()
     sample_id: str | None = None
+    noised_bits: str | None = None
+    noise_edits: tuple[dict[str, Any], ...] = ()
 
     @property
     def bits(self) -> str:
+        return self.noised_bits if self.noised_bits is not None else self.clean_bits
+
+    @property
+    def clean_bits(self) -> str:
         if not self.cot_segments_bits:
             return f"{self.query_bits}_{self.answer_bits}"
         return "_".join(
@@ -68,7 +74,7 @@ class QASample:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        document = {
             "query_bits": self.query_bits,
             "answer_bits": self.answer_bits,
             "query_vertices": list(self.query_vertices),
@@ -79,6 +85,11 @@ class QASample:
             "cot_segments_bits": list(self.cot_segments_bits),
             "sample_id": self.sample_id,
         }
+        if self.noised_bits is not None:
+            document["noised_bits"] = self.noised_bits
+            document["noise_edits"] = [{**edit, "bit_indices": list(edit["bit_indices"])}
+                                       for edit in self.noise_edits]
+        return document
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "QASample":
@@ -92,6 +103,9 @@ class QASample:
             segment_cuts=tuple(int(v) for v in d["segment_cuts"]),
             cot_segments_bits=tuple(str(v) for v in d.get("cot_segments_bits", ())),
             sample_id=d.get("sample_id"),
+            noised_bits=d.get("noised_bits"),
+            noise_edits=tuple({**edit, "bit_indices": tuple(edit["bit_indices"])}
+                              for edit in d.get("noise_edits", ())),
         )
 
 

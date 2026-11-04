@@ -272,6 +272,18 @@ all use the dataset policy; old manifests without the field retain simple-path
 semantics. Evaluation JSON records `allow_repeats` and console output prints the
 active policy. Generate repeat-enabled datasets with the sweep's `--allow-repeats`.
 
+### Train-only QA bit noise
+
+Datasets generated with `data.train_noise` preserve clean QA references and
+provide `noised_bits` for selected training examples. The tokenizer and batching
+use that noisy stream for inputs/answer targets, retaining the ordinary
+query/PAD loss masks. Validation and test stay clean. Noise settings and actual
+counts are logged in W&B dataset config and sweep results; changing them changes
+dataset identity and must not silently resume an old training run. Enable with
+the server sweep's `--train-noise` (5% examples, 1–3 codeword occurrences each,
+1–2 flipped bits per occurrence), optionally selecting `query`, `answer` or
+`both`. Segment-CoT fields remain clean; `answer` refers to final-answer targets.
+
 ## 5. Data pipeline (`data.py`)
 
 **Frozen mode** — `synthdata.storage.load_dataset` → `BitTokenizer.pack` into

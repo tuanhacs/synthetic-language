@@ -32,6 +32,8 @@ from synthdata.language import Language  # noqa: E402
 from synthdata.noise import apply_noise  # noqa: E402
 from synthdata.qa import build_qa_splits, qa_pool_stats  # noqa: E402
 from synthdata.qa_latent import encode_latent_pool, semantic_stats, frequency_report_lines  # noqa: E402
+from synthdata.qa_noise import apply_train_noise  # noqa: E402
+from synthdata.dataset import Splits  # noqa: E402
 from synthdata.storage import save_dataset  # noqa: E402
 
 
@@ -200,7 +202,15 @@ def build(
             n_noised = sum(1 for s in pool if s.noised_bits is not None)
             log(f"noise {cfg.data.noise.to_dict()}: {n_noised}/{len(pool)} sentences corrupted")
         splits = split_pool(pool, cfg.data.split, rng=rngs["split"])
-    log(f"\npool: {len(pool)} unique examples, {sum(len(s.bits) for s in pool)} tokens")
+    train_noise_report = None
+    if cfg.data.train_noise is not None:
+        train, train_noise_report = apply_train_noise(splits.train, cfg.data.train_noise)
+        splits = Splits(train, splits.valid, splits.test)
+        pool = [sample for _, split in splits.items() for sample in split]
+        log(f"train noise: {train_noise_report['corrupted_samples']}/{len(train)} samples; "
+            f"{train_noise_report['codeword_occurrences']} codeword occurrences; "
+            f"{train_noise_report['flipped_bits']} flipped bits (valid/test clean)")
+    log(f"\npool: {len(pool)} clean-unique examples before noise, {sum(len(s.bits) for s in pool)} tokens")
     log(f"splits: {splits.sizes()} | bits {splits.total_bits()}")
     qa_stats_by_split = None
     if cfg.task.type == "path-qa":
@@ -230,6 +240,8 @@ def build(
         )
 
     extra: dict[str, object] = {}
+    if train_noise_report is not None:
+        extra["train_noise"] = train_noise_report
     if cfg.task.type == "path-qa":
         extra["semantic_splits"] = {
             name: semantic_stats(split, graph, cfg.task, name)

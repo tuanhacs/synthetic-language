@@ -6,6 +6,7 @@ import hashlib
 import json
 import random
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from .codebooks import Codebooks
@@ -15,6 +16,7 @@ from .language import Language
 from .qa import LatentQASample, QASample, encode_qa, qa_pool_stats
 from .qa_latent import VERSION, sample_key, semantic_stats, stable_seed
 from .storage import load_dataset, save_dataset
+from .qa_noise import noise_report
 
 
 def reverse_cuts(cuts: tuple[int, ...]) -> tuple[int, ...]:
@@ -25,7 +27,7 @@ def reverse_cuts(cuts: tuple[int, ...]) -> tuple[int, ...]:
 def reverse_sample(sample: QASample) -> QASample:
     """Reverse vertices and individual bit fields, not the QA field order."""
     n = len(sample.answer_walk)
-    return QASample(
+    result = QASample(
         query_bits=sample.query_bits[::-1], answer_bits=sample.answer_bits[::-1],
         query_vertices=sample.query_vertices[::-1], answer_walk=sample.answer_walk[::-1],
         query_cuts=reverse_cuts(sample.query_cuts), answer_cuts=reverse_cuts(sample.answer_cuts),
@@ -33,6 +35,18 @@ def reverse_sample(sample: QASample) -> QASample:
         cot_segments_bits=tuple(bits[::-1] for bits in reversed(sample.cot_segments_bits)),
         sample_id=sample.sample_id,  # source ID intentionally retained for pairing
     )
+    if sample.noised_bits is None:
+        return result
+    parts = sample.noised_bits.split("_")
+    noised = "_".join((parts[0][::-1], *(part[::-1] for part in reversed(parts[1:-1])), parts[-1][::-1]))
+    edits = []
+    for edit in sample.noise_edits:
+        cuts = sample.query_cuts if edit["scope"] == "query" else sample.answer_cuts
+        index = edit["codeword_index"]
+        length = cuts[index] - (cuts[index - 1] if index else 0)
+        edits.append({**edit, "codeword_index": len(cuts) - 1 - index,
+                      "bit_indices": tuple(sorted(length - 1 - p for p in edit["bit_indices"]))})
+    return replace(result, noised_bits=noised, noise_edits=tuple(edits))
 
 
 def _sha(path: Path) -> str:
@@ -115,8 +129,12 @@ def build_reversed_dataset(cfg: Config, source: Path, latent_pool: Path, out: Pa
                             for name, samples in splits.items()},
     }
     # Evaluation loads test only, so this variant needs no duplicate train/valid.
+    if cfg.data.train_noise is not None:
+        extra["train_noise"] = {**noise_report(train, cfg.data.train_noise), "transform": "reversed-prefix"}
     paired_extra = {**extra, "reversal": {**extra["reversal"], "test_mode": "reversed-prefix"},
                     "semantic_splits": {"test": semantic_stats(paired, graph, cfg.task, "test")}}
+    if cfg.data.train_noise is not None:
+        paired_extra["train_noise"] = noise_report((), cfg.data.train_noise)
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".qa-reversal-", dir=out.parent) as temporary:
         staging = Path(temporary) / "dataset"

@@ -143,6 +143,34 @@ class NoiseConfig:
 
 
 @dataclass(frozen=True)
+class TrainNoiseConfig:
+    sample_rate: float = 0.05
+    scope: str = "both"  # query | answer (final only) | both; CoT fields stay clean
+    codeword_occurrences: tuple[int, int] = (1, 3)
+    bit_flips_per_occurrence: tuple[int, int] = (1, 2)
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        if isinstance(self.sample_rate, bool) or not isinstance(self.sample_rate, (int, float)) or not 0 <= self.sample_rate <= 1:
+            raise ConfigError("data.train_noise.sample_rate must be in [0, 1]")
+        if self.scope not in ("query", "answer", "both"):
+            raise ConfigError("data.train_noise.scope must be query, answer or both")
+        for name in ("codeword_occurrences", "bit_flips_per_occurrence"):
+            bounds = getattr(self, name)
+            if (not isinstance(bounds, (list, tuple)) or len(bounds) != 2
+                    or any(isinstance(v, bool) or not isinstance(v, int) for v in bounds)
+                    or not 1 <= bounds[0] <= bounds[1]):
+                raise ConfigError(f"data.train_noise.{name} must be a positive [min, max] integer pair")
+        if isinstance(self.seed, bool) or not isinstance(self.seed, int):
+            raise ConfigError("data.train_noise.seed must be an integer")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"sample_rate": self.sample_rate, "scope": self.scope,
+                "codeword_occurrences": list(self.codeword_occurrences),
+                "bit_flips_per_occurrence": list(self.bit_flips_per_occurrence), "seed": self.seed}
+
+
+@dataclass(frozen=True)
 class DataConfig:
     walk_len: tuple[int, int] = (8, 32)
     pool_tokens: int | None = 10_000_000
@@ -152,6 +180,7 @@ class DataConfig:
     reverse_walks: bool = False
     noise: NoiseConfig | None = None
     context_len: int | None = 512  # None means derive it from the generated pool
+    train_noise: TrainNoiseConfig | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out = {
@@ -166,6 +195,8 @@ class DataConfig:
             out["pool_tokens"] = self.pool_tokens
         if self.pool_query_pairs is not None:
             out["pool_query_pairs"] = self.pool_query_pairs
+        if self.train_noise is not None:
+            out["train_noise"] = self.train_noise.to_dict()
         return out
 
 
@@ -334,6 +365,23 @@ def _noise_config(raw: Any) -> NoiseConfig | None:
     return NoiseConfig(type=ntype, gamma=gamma, rho=rho)
 
 
+def _train_noise_config(raw: Any) -> TrainNoiseConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError("data.train_noise must be null or a mapping")
+    unknown = set(raw) - {"sample_rate", "scope", "codeword_occurrences", "bit_flips_per_occurrence", "seed"}
+    if unknown:
+        raise ConfigError(f"unknown data.train_noise fields: {sorted(unknown)}")
+    values = dict(raw)
+    for name in ("codeword_occurrences", "bit_flips_per_occurrence"):
+        if name in values:
+            if not isinstance(values[name], (list, tuple)):
+                raise ConfigError(f"data.train_noise.{name} must be a [min, max] pair")
+            values[name] = tuple(values[name])
+    return TrainNoiseConfig(**values)
+
+
 def parse_config(raw: dict[str, Any]) -> Config:
     """Build a validated :class:`Config` from a plain dict."""
     unknown = set(raw) - {"language", "data", "task"}
@@ -349,7 +397,7 @@ def parse_config(raw: dict[str, Any]) -> Config:
         raise ConfigError(f"unknown language fields: {sorted(unknown)}")
     unknown = set(data_raw) - {
         "walk_len", "pool_tokens", "pool_query_pairs", "split", "seed",
-        "reverse_walks", "noise", "context_len"
+        "reverse_walks", "noise", "context_len", "train_noise"
     }
     if unknown:
         raise ConfigError(f"unknown data fields: {sorted(unknown)}")
@@ -402,6 +450,7 @@ def parse_config(raw: dict[str, Any]) -> Config:
         reverse_walks=reverse_walks,
         noise=_noise_config(data_raw.get("noise")),
         context_len=context_len,
+        train_noise=_train_noise_config(data_raw.get("train_noise")),
     )
 
     cfg = Config(language=language, data=data, task=_task_config(raw.get("task")))
@@ -497,6 +546,8 @@ def validate_config(cfg: Config) -> list[str]:
         raise ConfigError("data.context_len: auto is currently only supported for path-QA")
 
     task = cfg.task
+    if cfg.data.train_noise is not None and task.type != "path-qa":
+        raise ConfigError("data.train_noise requires task.type: path-qa")
     if task.type == "path-qa":
         if not isinstance(task.allow_repeats, bool):
             raise ConfigError("task.allow_repeats must be a boolean")

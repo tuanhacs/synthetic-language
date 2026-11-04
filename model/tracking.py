@@ -85,6 +85,7 @@ class RunTracker:
                 "assignment": language.get("assignment"),
                 "qa_mode": manifest.get("config", {}).get("task", {}).get("split_mode"),
                 "train_query_pairs": stats.get("splits", {}).get("train", {}).get("query_pair_occurrences"),
+                "train_noise": stats.get("train_noise"),
                 "dataset": {
                     "config_hash": manifest.get("config_hash"),
                     "fingerprint": manifest.get("dataset_fingerprint"),
