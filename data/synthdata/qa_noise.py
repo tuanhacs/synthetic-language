@@ -13,6 +13,7 @@ from .config import TrainNoiseConfig
 from .qa import QASample
 
 VERSION = "qa-occurrence-bit-flip-v1"
+QUERY_NOISE_VERSION = "qa-test-query-bit-flip-v1"
 
 
 def _identity(sample: QASample, index: int) -> str:
@@ -46,19 +47,26 @@ def noise_report(samples: Sequence[QASample], cfg: TrainNoiseConfig) -> dict:
     }
 
 
-def apply_train_noise(samples: Sequence[QASample], cfg: TrainNoiseConfig) -> tuple[tuple[QASample, ...], dict]:
+def _bounded_count(bounds: tuple[int, int], available: int, rng: random.Random) -> int:
+    if available < 1:
+        raise ValueError("no eligible occurrences/bits for query noise")
+    return rng.randint(min(bounds[0], available), min(bounds[1], available))
+
+
+def _apply_noise(samples: Sequence[QASample], cfg: TrainNoiseConfig, *,
+                 namespace: str = VERSION, bounded_draw: bool = False) -> tuple[tuple[QASample, ...], dict]:
     if any(s.noised_bits is not None for s in samples):
         raise ValueError("train noise must be applied once to clean QA samples")
     n = int(len(samples) * cfg.sample_rate)
     selected = {i for _, i in heapq.nsmallest(n, (
-        (hashlib.sha256(f"{VERSION}:{cfg.seed}:select:{_identity(s, i)}".encode()).digest(), i)
+        (hashlib.sha256(f"{namespace}:{cfg.seed}:select:{_identity(s, i)}".encode()).digest(), i)
         for i, s in enumerate(samples)))}
     output = []
     for index, sample in enumerate(samples):
         if index not in selected:
             output.append(sample)
             continue
-        seed = hashlib.sha256(f"{VERSION}:{cfg.seed}:edit:{_identity(sample, index)}".encode()).digest()
+        seed = hashlib.sha256(f"{namespace}:{cfg.seed}:edit:{_identity(sample, index)}".encode()).digest()
         rng = random.Random(int.from_bytes(seed, "big"))
         candidates = []
         for scope, cuts, offset in (("query", sample.query_cuts, 0),
@@ -71,11 +79,13 @@ def apply_train_noise(samples: Sequence[QASample], cfg: TrainNoiseConfig) -> tup
                     raise ValueError("codeword cuts must be strictly increasing")
                 candidates.append((scope, occurrence, offset + start, end - start))
                 start = end
-        k = min(rng.randint(*cfg.codeword_occurrences), len(candidates))
+        k = (_bounded_count(cfg.codeword_occurrences, len(candidates), rng) if bounded_draw
+             else min(rng.randint(*cfg.codeword_occurrences), len(candidates)))
         chars = list(sample.clean_bits)
         edits = []
         for scope, occurrence, start, length in rng.sample(candidates, k):
-            bit_count = min(rng.randint(*cfg.bit_flips_per_occurrence), length)
+            bit_count = (_bounded_count(cfg.bit_flips_per_occurrence, length, rng) if bounded_draw
+                         else min(rng.randint(*cfg.bit_flips_per_occurrence), length))
             positions = tuple(sorted(rng.sample(range(length), bit_count)))
             for position in positions:
                 ch = chars[start + position]
@@ -88,3 +98,18 @@ def apply_train_noise(samples: Sequence[QASample], cfg: TrainNoiseConfig) -> tup
         output.append(replace(sample, noised_bits="".join(chars), noise_edits=tuple(edits)))
     result = tuple(output)
     return result, noise_report(result, cfg)
+
+
+def apply_train_noise(samples: Sequence[QASample], cfg: TrainNoiseConfig) -> tuple[tuple[QASample, ...], dict]:
+    # Keep v1 train-noise draws unchanged for existing frozen datasets.
+    return _apply_noise(samples, cfg)
+
+
+def apply_query_noise(samples: Sequence[QASample], cfg: TrainNoiseConfig) -> tuple[tuple[QASample, ...], dict]:
+    """Noise only test prompts, retaining clean vertices/answer reference fields."""
+    if cfg.scope != "query":
+        raise ValueError("test-query noise must have scope=query")
+    result, report = _apply_noise(samples, cfg, namespace=QUERY_NOISE_VERSION, bounded_draw=True)
+    report["version"] = QUERY_NOISE_VERSION
+    report["test_samples"] = report.pop("train_samples")
+    return result, report

@@ -26,7 +26,8 @@ from synthdata.qa import (
     validate_qa_answer,
 )
 
-from config import EvalConfig
+from config import EvalConfig, TestNoiseConfig
+from synthdata.qa_noise import apply_query_noise
 from data import IGNORE_INDEX, PackedData
 from model import Model
 from sample import generate
@@ -205,12 +206,25 @@ def eval_path_qa(
     rng: torch.Generator | None = None,
     batch_size: int = 64,
     task_config: dict | None = None,
+    test_noise: TestNoiseConfig | None = None,
 ) -> dict:
     """Prompt with ``query_bits + '_'`` and score any semantically valid route."""
     if not test_samples:
         raise ValueError("path-QA evaluation needs a non-empty test split")
+    if n_samples < 1:
+        raise ValueError("n_samples must be positive")
     selected = [test_samples[i % len(test_samples)] for i in range(n_samples)]
     prefixes = [sample.query_bits + "_" for sample in selected]
+    noise_info = None
+    noisy_selected = None
+    noise_groups = {name: {"n": 0, "answer_decodable": 0, "valid_walk": 0,
+        "semantic_success": 0, "full_success": 0} for name in ("noisy", "clean")}
+    if test_noise is not None:
+        # Corrupt each selected source sample once, even when n_samples wraps.
+        base = list(test_samples[:min(n_samples, len(test_samples))])
+        noisy_base, noise_info = apply_query_noise(base, test_noise.as_query_noise())
+        noisy_selected = [noisy_base[i % len(noisy_base)] for i in range(n_samples)]
+        prefixes = [s.bits[:len(s.query_bits)] + "_" for s in noisy_selected]
     cot_mode = str((task_config or {}).get("cot_mode", "none"))
     cot_enabled = cot_mode == "segments"
     allow_repeats = bool((task_config or {}).get("allow_repeats", False))
@@ -264,7 +278,7 @@ def eval_path_qa(
     overlap_rows = int((task_config or {}).get("region_overlap_rows", 2))
     by_cross_count: dict[int, dict[str, int]] = {}
     by_direction: dict[str, dict[str, int]] = {}
-    for sample, prefix, full in zip(selected, prefixes, generated):
+    for sample_index, (sample, prefix, full) in enumerate(zip(selected, prefixes, generated)):
         if not full.startswith(prefix):
             raise RuntimeError("generator did not preserve the QA prompt")
         completion = full[len(prefix) :]
@@ -310,6 +324,14 @@ def eval_path_qa(
         counts["full_success"] += result["semantic_success"] and terminated
         counts["exact_reference_bits"] += answer == sample.answer_bits
         counts["exact_reference_walk"] += result["walk"] == sample.answer_walk
+        query_noised = noisy_selected is not None and noisy_selected[sample_index].noised_bits is not None
+        if noise_info is not None:
+            group = noise_groups["noisy" if query_noised else "clean"]
+            group["n"] += 1
+            group["answer_decodable"] += int(result["decodable"])
+            group["valid_walk"] += int(result["valid_walk"])
+            group["semantic_success"] += int(result["semantic_success"])
+            group["full_success"] += int(result["semantic_success"] and terminated)
         cross_segments = 0
         direction = None
         if cross_enabled:
@@ -338,6 +360,9 @@ def eval_path_qa(
                 {
                     "query_vertices": list(sample.query_vertices),
                     "query_bits": sample.query_bits,
+                    **({"prompt_query_bits": prefix[:-1], "query_noised": query_noised,
+                        "query_noise_edits": list(noisy_selected[sample_index].noise_edits)}
+                       if noisy_selected is not None else {}),
                     "reference_walk": list(sample.answer_walk),
                     "generated_completion": completion,
                     "generated_answer_bits": answer,
@@ -386,6 +411,13 @@ def eval_path_qa(
             f"{key}_pct": 100.0 * value / total
             for key, value in cot_counts.items()
         }
+    if noise_info is not None:
+        report["test_noise"] = {**noise_info, "config": test_noise.to_dict(),
+            "scope": "query", "ground_truth": "clean query_vertices",
+            "by_group": {name: {"n": group["n"], **{
+                f"{key}_pct": 100.0 * value / group["n"] if group["n"] else None
+                for key, value in group.items() if key != "n"}}
+                for name, group in noise_groups.items()}}
     if cross_enabled:
         def summarise(groups: dict) -> dict[str, dict[str, float | int]]:
             return {
@@ -458,6 +490,7 @@ def run_all(
             rng=rng,
             batch_size=eval_cfg.gen_batch_size,
             task_config=report["task"],
+            test_noise=eval_cfg.test_noise,
         )
         if out_dir is not None:
             path = Path(out_dir)
@@ -467,6 +500,9 @@ def run_all(
             )
             report["report_path"] = str(path / "eval_report.json")
         return report
+
+    if eval_cfg.test_noise is not None:
+        raise ValueError("test-query noise requires a path-QA dataset")
 
     train_bits = [s.bits for s in data.train_samples]
     for cut in eval_cfg.cuts:
@@ -528,6 +564,14 @@ def format_report(report: dict) -> str:
                     f"final-consistent {cot['final_consistent_pct']:.1f}%  "
                     f"CoT+semantic {cot['cot_and_semantic_success_pct']:.1f}%"
                 )
+            if "test_noise" in res:
+                noise = res["test_noise"]
+                lines.append(f"         query noise: {noise['corrupted_samples']}/{noise['test_samples']} "
+                             f"selected test examples; {noise['flipped_bits']} flipped bits")
+                for name, group in noise["by_group"].items():
+                    detail = (f"  decodable {group['answer_decodable_pct']:.1f}%  "
+                              f"semantic {group['semantic_success_pct']:.1f}%" if group["n"] else "")
+                    lines.append(f"         {name} queries n={group['n']}{detail}")
             if "cross_region" in res:
                 cross = res["cross_region"]
                 lines.append(

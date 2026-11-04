@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from _paths import MODEL_ROOT  # the ``model/`` directory; relative config paths hang off it
+from synthdata.config import TrainNoiseConfig
 
 #: Named model family for scaling-law sweeps: size -> (d_model, n_layers, n_heads).
 #: With a 5-token vocabulary the embedding is negligible, so parameter counts are
@@ -129,6 +130,30 @@ class TrainConfig:
 
 
 @dataclass(frozen=True)
+class TestNoiseConfig:
+    sample_rate: float = 1.0
+    codeword_occurrences: tuple[int, int] = (1, 3)
+    bit_flips_per_occurrence: tuple[int, int] = (1, 2)
+    seed: int = 0
+
+    def as_query_noise(self) -> TrainNoiseConfig:
+        return TrainNoiseConfig(sample_rate=self.sample_rate, scope="query",
+            codeword_occurrences=self.codeword_occurrences,
+            bit_flips_per_occurrence=self.bit_flips_per_occurrence, seed=self.seed)
+
+    def __post_init__(self) -> None:
+        try:
+            self.as_query_noise()
+        except ValueError as exc:
+            raise ConfigError(f"eval.test_noise: {exc}") from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        values = self.as_query_noise().to_dict()
+        values.pop("scope")
+        return values
+
+
+@dataclass(frozen=True)
 class EvalConfig:
     n_samples: int = 200
     temperature: float = 1.0
@@ -136,9 +161,10 @@ class EvalConfig:
     max_len: int | None = None  # generation cap in tokens; None = model context_len
     gen_batch_size: int = 64
     seed: int = 0
+    test_noise: TestNoiseConfig | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        values = {
             "n_samples": self.n_samples,
             "temperature": self.temperature,
             "cuts": list(self.cuts),
@@ -146,6 +172,9 @@ class EvalConfig:
             "gen_batch_size": self.gen_batch_size,
             "seed": self.seed,
         }
+        if self.test_noise is not None:
+            values["test_noise"] = self.test_noise.to_dict()
+        return values
 
 
 @dataclass(frozen=True)
@@ -246,7 +275,19 @@ def parse_config(raw: dict[str, Any], path: str | None = None) -> Config:
         train_raw["betas"] = (float(b[0]), float(b[1]))
 
     eval_raw = dict(raw.get("eval") or {})
-    _check_keys(eval_raw, set(EvalConfig().to_dict()), "eval")
+    _check_keys(eval_raw, set(EvalConfig().__dict__), "eval")
+    if eval_raw.get("test_noise") is not None:
+        noise = eval_raw["test_noise"]
+        if not isinstance(noise, dict):
+            raise ConfigError("eval.test_noise must be a mapping or null")
+        _check_keys(noise, set(TestNoiseConfig().__dict__), "eval.test_noise")
+        noise = dict(noise)
+        for key in ("codeword_occurrences", "bit_flips_per_occurrence"):
+            if key in noise:
+                if not isinstance(noise[key], (list, tuple)):
+                    raise ConfigError(f"eval.test_noise.{key} must be a [min, max] pair")
+                noise[key] = tuple(noise[key])
+        eval_raw["test_noise"] = TestNoiseConfig(**noise)
     if "cuts" in eval_raw:
         cuts = eval_raw["cuts"]
         if not isinstance(cuts, (list, tuple)) or any(int(c) < 0 for c in cuts):

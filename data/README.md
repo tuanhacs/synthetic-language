@@ -850,6 +850,35 @@ noise membership may change when the requested training subset size changes;
 the clean latent subsets remain nested and edits for shared selected IDs remain
 reproducible at the same encoding. The noise seed is independent of train seeds.
 
+### Optional noisy-query test after training
+
+Add `--test-noise` to a server sweep to run **both** the ordinary clean test and
+an additional noisy-query test on the same checkpoint/examples. This is independent
+of `--train-noise`: either clean or noisy training can be evaluated on both views.
+Defaults: 100% of evaluated queries, 1–3 distinct codeword occurrences, 1–2 bit
+flips per occurrence, noise seed 0. Query length/word length bounds are capped
+before drawing counts; query length 2 never attempts to select 3 occurrences.
+
+```bash
+--test-noise --test-noise-rate 0.05 \
+--test-noise-codewords 1 3 --test-noise-bits 1 2 --test-noise-seed 0
+```
+
+The model sees a noisy prompt, but only its generated answer/CoT are decoded;
+success uses clean waypoint labels. Disk test data remain clean. The additional
+report lives in `runs/<name>/eval_noisy/eval_report.json`; sweep `results.json`
+keeps the ordinary clean fields and adds `noisy_test`. Partial rates also report
+noisy/clean subgroup results. Paired reversal additionally evaluates noisy reversed
+suffix prompts in `eval_reversed_noisy`, recorded as `reversed_noisy_test`.
+W&B metrics use separate noisy namespaces. See the model README for standalone
+evaluation flags and model YAML configuration.
+
+Test-noise options do not change training/data settings identity. You can add them
+to an already completed sweep to run the extra test without retraining or regenerating
+data; matching noisy evaluations are skipped. Changing test-noise seed/rate/bounds
+reruns only that view, replacing its previous report. Use standalone evaluation
+with a different `--out-dir` to retain multiple noise settings side by side.
+
 ### Adding UD and W&B to the server sweep
 
 For repeated training on fixed data/codebooks, keep `--seed 0 --encoding-seed 0`

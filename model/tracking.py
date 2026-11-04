@@ -108,6 +108,8 @@ def log_evaluation(cfg: Config, checkpoint: Path, report: dict, step: int, label
     try:
         generation = report.get("generation", {})
         prefix = f"test/{label}" if label else "test"
+        if generation.get("path_qa", {}).get("test_noise") is not None:
+            prefix += "/noisy"
         values = flatten_metrics(generation.get("path_qa", generation), prefix)
         if "path_qa" in generation:
             values[f"{prefix}/decodable_pct"] = generation["path_qa"]["answer_decodable_pct"]

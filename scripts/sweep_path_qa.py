@@ -74,6 +74,11 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--train-noise-codewords", type=int, nargs=2, default=[1, 3], metavar=("MIN", "MAX"))
     ap.add_argument("--train-noise-bits", type=int, nargs=2, default=[1, 2], metavar=("MIN", "MAX"))
     ap.add_argument("--train-noise-seed", type=int, default=0)
+    ap.add_argument("--test-noise", action="store_true", help="add noisy-query test after the ordinary clean test")
+    ap.add_argument("--test-noise-rate", type=float, default=None, help="also enables noisy-query test; default 1.0")
+    ap.add_argument("--test-noise-codewords", type=int, nargs=2, default=[1, 3], metavar=("MIN", "MAX"))
+    ap.add_argument("--test-noise-bits", type=int, nargs=2, default=[1, 2], metavar=("MIN", "MAX"))
+    ap.add_argument("--test-noise-seed", type=int, default=0)
     ap.add_argument("--grid-size", type=int, default=6)
     ap.add_argument("--query-min", type=int, default=2)
     ap.add_argument("--query-max", type=int, default=4)
@@ -149,6 +154,11 @@ def main(argv: list[str] | None = None) -> int:
         train_noise = {"sample_rate": args.train_noise_rate if args.train_noise_rate is not None else 0.05,
                        "scope": args.train_noise_scope, "codeword_occurrences": args.train_noise_codewords,
                        "bit_flips_per_occurrence": args.train_noise_bits, "seed": args.train_noise_seed}
+    test_noise = None
+    if args.test_noise or args.test_noise_rate is not None:
+        test_noise = {"sample_rate": args.test_noise_rate if args.test_noise_rate is not None else 1.0,
+                      "codeword_occurrences": args.test_noise_codewords,
+                      "bit_flips_per_occurrence": args.test_noise_bits, "seed": args.test_noise_seed}
     sizes = list(range(args.train_min, args.train_max + 1, args.train_step))
     # Always establish prefix as the assignment-slot reference, even for a
     # suffix/UD-only worker. Independent workers can share a pre-created pool.
@@ -163,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = {key: str(value) if isinstance(value, Path) else value
                 for key, value in vars(args).items()
                 if key not in ("stage", "dry_run", "output_root", "code_types", "ud_pool")
-                and not key.startswith("wandb")}
+                and not key.startswith(("wandb", "test_noise"))}
     for key in list(settings):
         if key.startswith("train_noise"):
             settings.pop(key)
@@ -223,6 +233,10 @@ def main(argv: list[str] | None = None) -> int:
     from synthdata.graphs import graph_from_spec
     from synthdata.qa_latent import semantic_config
     from synthdata.tokenizer import QA_PACKING_VERSION
+    from synthdata.config import TrainNoiseConfig
+    if test_noise is not None:
+        TrainNoiseConfig(scope="query", **{
+            key: tuple(value) if isinstance(value, list) else value for key, value in test_noise.items()})
     canonical = parse_config(data_config("prefix"))
     for kind in args.code_types:
         parse_config(data_config(kind))
@@ -364,6 +378,32 @@ def main(argv: list[str] | None = None) -> int:
                         out / "logs" / f"{name}_eval_reversed.log", args.dry_run)
                     if not args.dry_run:
                         reversed_marker.write_text(json.dumps({"temperature": args.temperature}) + "\n")
+            noisy_report_dirs = {}
+            if test_noise is not None:
+                noisy_views = [("noisy_test", dataset, run_dir / "eval_noisy",
+                                "natural" if args.paired_reversal else None)]
+                if args.paired_reversal and kind == "suffix":
+                    noisy_views.append(("reversed_noisy_test", dataset / "test_reversed",
+                                        run_dir / "eval_reversed_noisy", "reversed"))
+                for view, test_dataset, directory, label in noisy_views:
+                    noisy_report_dirs[view] = directory
+                    marker = directory / "evaluation_complete.json"
+                    identity = {"test_noise": test_noise, "temperature": args.temperature,
+                                "n_samples": args.eval_samples, "eval_seed": args.seed}
+                    if not (marker.exists() and (directory / "eval_report.json").exists()
+                            and json.loads(marker.read_text()) == identity):
+                        run("model/scripts/evaluate.py", [str(run_dir / "best.pt"),
+                            "--dataset", str(test_dataset), "--out-dir", str(directory),
+                            "--device", "cuda", "--n-samples", str(args.eval_samples),
+                            "--gen-batch-size", str(args.gen_batch_size), "--temperature", str(args.temperature),
+                            "--test-noise", "--test-noise-rate", str(test_noise["sample_rate"]),
+                            "--test-noise-codewords", *map(str, test_noise["codeword_occurrences"]),
+                            "--test-noise-bits", *map(str, test_noise["bit_flips_per_occurrence"]),
+                            "--test-noise-seed", str(test_noise["seed"]),
+                            *(["--eval-label", label] if label else [])],
+                            out / "logs" / f"{name}_{view}.log", args.dry_run)
+                        if not args.dry_run:
+                            marker.write_text(json.dumps(identity) + "\n")
             if not args.dry_run:
                 report = json.loads((run_dir / "eval_report.json").read_text())
                 metrics = report["generation"]["path_qa"]
@@ -383,6 +423,14 @@ def main(argv: list[str] | None = None) -> int:
                     "report": str(run_dir / "eval_report.json"),
                 }
                 train_summary_path = run_dir / "train_summary.json"
+                for view, directory in noisy_report_dirs.items():
+                    noisy_report = json.loads((directory / "eval_report.json").read_text())
+                    noisy_metrics = noisy_report["generation"]["path_qa"]
+                    row[view] = {"decodable_pct": noisy_metrics["answer_decodable_pct"],
+                                 "success_pct": noisy_metrics["semantic_success_pct"],
+                                 "n_samples": noisy_metrics["n_samples"],
+                                 "test_noise": noisy_metrics.get("test_noise"),
+                                 "report": str(directory / "eval_report.json")}
                 if train_noise is not None:
                     row["train_noise"] = manifest["stats"]["train_noise"]
                 if args.paired_reversal:

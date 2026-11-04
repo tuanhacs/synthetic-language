@@ -284,6 +284,57 @@ the server sweep's `--train-noise` (5% examples, 1–3 codeword occurrences each
 1–2 flipped bits per occurrence), optionally selecting `query`, `answer` or
 `both`. Segment-CoT fields remain clean; `answer` refers to final-answer targets.
 
+### Noisy-query test (clean answer scoring)
+
+Use `--test-noise` with `scripts/evaluate.py` to flip only the query presented to
+the model. The evaluator does **not** decode the corrupted query: all generated
+answers/CoT are decoded and scored against the original clean `query_vertices`.
+Reference answers, codebooks and test files are never corrupted or rewritten.
+This works with both clean-trained and noise-trained checkpoints, no-CoT or
+segments, simple/repeat-enabled routes, disjoint/overlap and all QA split modes.
+
+```bash
+python model/scripts/evaluate.py /path/to/best.pt \
+  --dataset /path/to/dataset --device cuda --n-samples 1000 \
+  --test-noise --test-noise-rate 1.0 \
+  --test-noise-codewords 1 3 --test-noise-bits 1 2 --test-noise-seed 0
+```
+
+Default noisy-test output is `<checkpoint_dir>/eval_noisy/eval_report.json`,
+leaving the ordinary clean `eval_report.json` intact. `--out-dir` overrides this
+destination. Without noise flags, behavior remains unchanged unless the checkpoint
+config explicitly sets `eval.test_noise`; `--no-test-noise` forces clean prompts.
+
+Optional model YAML (omit/null for clean evaluation):
+
+```yaml
+eval:
+  test_noise:
+    sample_rate: 1.0
+    codeword_occurrences: [1, 3]
+    bit_flips_per_occurrence: [1, 2]
+    seed: 0
+```
+
+`--test-noise` defaults to 100% of the evaluated source examples. For partial
+rates, selection is exactly `floor(selected_examples * sample_rate)` using stable
+SHA256 ranks. Occurrence and bit-count ranges are capped **before** uniform
+sampling: query length 2 with `[1,3]` chooses uniformly between 1 and 2 occurrences,
+not a clipped 1/2/3 draw. A one-bit word can only have one bit flipped. Occurrences
+and bit positions are sampled without replacement. Repeated evaluations with the
+same encoded test set, sample count, noise config and seed reuse the same noise;
+this RNG is independent of model generation/training RNG. If evaluation wraps
+over a small test set, each repeated source example reuses its noisy prompt.
+Changing sample count can change partial-rate membership. Flips that happen to
+form another valid codeword are still scored against the original clean intent.
+
+Report percentages retain their normal meanings. `test_noise.by_group` adds
+counts and decodable/valid-walk/semantic/full-success rates separately for noisy
+and unchanged prompts; empty groups report null percentages. Examples retain
+clean `query_bits` and add `prompt_query_bits`, `query_noised`, and edit positions.
+W&B uses `test/noisy/*` (or e.g. `test/reversed/noisy/*` for a labeled view), so it
+does not overwrite clean-test summary keys. Subgroup metrics are logged too.
+
 ## 5. Data pipeline (`data.py`)
 
 **Frozen mode** — `synthdata.storage.load_dataset` → `BitTokenizer.pack` into

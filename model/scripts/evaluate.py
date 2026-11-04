@@ -27,6 +27,7 @@ from data import load_frozen_test_only, resolve_device, seed_everything  # noqa:
 from evals import format_report, run_all  # noqa: E402
 from train import load_checkpoint  # noqa: E402
 from tracking import log_evaluation  # noqa: E402
+from config import ConfigError, TestNoiseConfig  # noqa: E402
 
 
 def main() -> int:
@@ -50,6 +51,12 @@ def main() -> int:
                     help="override checkpoint tracking mode, e.g. disabled for local-only evaluation")
     ap.add_argument("--eval-label", choices=("natural", "reversed"), default=None,
                     help="optional W&B metric namespace test/<label>, avoiding overwrites")
+    ap.add_argument("--test-noise", action=argparse.BooleanOptionalAction, default=None,
+                    help="perturb only query bits; default 100%% of evaluated queries, clean answers/labels")
+    ap.add_argument("--test-noise-rate", type=float, default=None)
+    ap.add_argument("--test-noise-codewords", type=int, nargs=2, default=None, metavar=("MIN", "MAX"))
+    ap.add_argument("--test-noise-bits", type=int, nargs=2, default=None, metavar=("MIN", "MAX"))
+    ap.add_argument("--test-noise-seed", type=int, default=None)
     args = ap.parse_args()
 
     device = resolve_device(args.device)
@@ -71,12 +78,30 @@ def main() -> int:
         if v is not None
     }
     eval_cfg = dataclasses.replace(cfg.eval, **eval_overrides)
+    noise_overrides = {key: value for key, value in {
+        "sample_rate": args.test_noise_rate,
+        "codeword_occurrences": tuple(args.test_noise_codewords) if args.test_noise_codewords is not None else None,
+        "bit_flips_per_occurrence": tuple(args.test_noise_bits) if args.test_noise_bits is not None else None,
+        "seed": args.test_noise_seed,
+    }.items() if value is not None}
+    if args.test_noise is False:
+        if noise_overrides:
+            ap.error("--no-test-noise cannot be combined with test-noise parameters")
+        eval_cfg = dataclasses.replace(eval_cfg, test_noise=None)
+    elif args.test_noise or noise_overrides:
+        try:
+            noise_cfg = dataclasses.replace(eval_cfg.test_noise or TestNoiseConfig(), **noise_overrides)
+        except (ConfigError, TypeError) as exc:
+            ap.error(str(exc))
+        eval_cfg = dataclasses.replace(eval_cfg, test_noise=noise_cfg)
 
     dataset_dir = Path(args.dataset) if args.dataset else cfg.resolved_dataset_dir()
     seed_everything(eval_cfg.seed)
     data = load_frozen_test_only(dataset_dir, cfg.model.context_len)
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(args.checkpoint).resolve().parent
+    if args.out_dir is None and eval_cfg.test_noise is not None:
+        out_dir = out_dir / "eval_noisy"
     report = run_all(
         model,
         data,

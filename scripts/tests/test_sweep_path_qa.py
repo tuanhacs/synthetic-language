@@ -188,7 +188,7 @@ class SweepTests(unittest.TestCase):
     def test_train_noise_with_paired_reversal_and_clean_evaluation(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "noise-sweep"
-            arguments = ["--output-root", str(output), "--paired-reversal", "--train-noise-rate", "0.5",
+            arguments = ["--output-root", str(output), "--paired-reversal", "--train-noise-rate", "0.5", "--test-noise",
                 "--pool-train-pairs", "30", "--train-min", "20", "--train-max", "20",
                 "--valid-query-pairs", "10", "--test-query-pairs", "10",
                 "--qa-mode", "iid", "--assignment", "disjoint", "--cot-mode", "segments",
@@ -213,6 +213,8 @@ class SweepTests(unittest.TestCase):
                 sweep.main(arguments)
             rows = json.loads((output / "results.json").read_text())
             self.assertTrue(all(r["train_noise"]["corrupted_samples"] > 0 for r in rows))
+            self.assertTrue(all("noisy_test" in r for r in rows))
+            self.assertTrue(any("reversed_noisy_test" in r for r in rows))
             for kind in ("prefix", "suffix"):
                 directory = output / "datasets" / kind / "20"
                 noisy = [json.loads(line) for line in (directory / "train.jsonl").read_text().splitlines()]
@@ -221,6 +223,44 @@ class SweepTests(unittest.TestCase):
                 for name in ("valid", "test"):
                     clean = [json.loads(line) for line in (directory / f"{name}.jsonl").read_text().splitlines()]
                     self.assertTrue(all("noised_bits" not in r for r in clean))
+
+    def test_adding_or_changing_test_noise_does_not_retrain(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "eval-only-noise"
+            arguments = ["--output-root", str(output), "--code-types", "prefix",
+                "--pool-train-pairs", "30", "--train-min", "20", "--train-max", "20",
+                "--valid-query-pairs", "10", "--test-query-pairs", "10",
+                "--qa-mode", "iid", "--assignment", "disjoint", "--cot-mode", "none",
+                "--max-steps", "10", "--eval-samples", "1"]
+            real_run = sweep.run
+            calls = []
+            def run(script, args, log, dry_run):
+                calls.append(script)
+                if script == "model/scripts/train.py":
+                    cfg = yaml.safe_load(Path(args[0]).read_text())
+                    directory = Path(cfg["train"]["out_dir"])
+                    directory.mkdir(parents=True)
+                    (directory / "best.pt").write_bytes(b"fake GPU")
+                elif script == "model/scripts/evaluate.py":
+                    directory = Path(args[args.index("--out-dir") + 1]) if "--out-dir" in args else Path(args[0]).parent
+                    directory.mkdir(exist_ok=True, parents=True)
+                    (directory / "eval_report.json").write_text(json.dumps({"generation": {"path_qa": {
+                        "n_samples": 1, "answer_decodable_pct": 100., "semantic_success_pct": 100.,
+                    }}}))
+                else:
+                    real_run(script, args, log, dry_run)
+            with patch.object(sweep, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+                sweep.main(arguments)
+                sweep.main(arguments + ["--test-noise"])
+                before = len(calls)
+                sweep.main(arguments + ["--test-noise"])
+                self.assertEqual(len(calls), before)
+                sweep.main(arguments + ["--test-noise", "--test-noise-seed", "7"])
+            self.assertEqual(calls.count("model/scripts/train.py"), 1)
+            self.assertEqual(calls.count("data/scripts/gen_dataset.py"), 1)
+            self.assertEqual(calls.count("model/scripts/evaluate.py"), 3)
+            row = json.loads((output / "results.json").read_text())[0]
+            self.assertIn("noisy_test", row)
 
 
 if __name__ == "__main__":

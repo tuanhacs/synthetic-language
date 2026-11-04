@@ -143,6 +143,16 @@ class TrackingTests(unittest.TestCase):
                 train.train(self.cfg)
         tracker.finish.assert_called_once_with(exit_code=1)
 
+    def test_noisy_query_metrics_keep_clean_summary_keys(self):
+        report = {"generation": {"path_qa": {"answer_decodable_pct": 99.,
+                  "semantic_success_pct": 85., "test_noise": {"corrupted_samples": 1000}}}}
+        with patch.dict(sys.modules, {"wandb": self.sdk}):
+            log_evaluation(self.cfg, self.root / "best.pt", report, 100)
+            log_evaluation(self.cfg, self.root / "best.pt", report, 100, label="reversed")
+        self.assertEqual(self.created[0].summary["test/noisy/success_pct"], 85.)
+        self.assertEqual(self.created[1].summary["test/reversed/noisy/success_pct"], 85.)
+        self.assertNotIn("test/success_pct", self.created[0].summary)
+
 
 if __name__ == "__main__":
     unittest.main()
