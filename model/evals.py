@@ -213,6 +213,7 @@ def eval_path_qa(
     prefixes = [sample.query_bits + "_" for sample in selected]
     cot_mode = str((task_config or {}).get("cot_mode", "none"))
     cot_enabled = cot_mode == "segments"
+    allow_repeats = bool((task_config or {}).get("allow_repeats", False))
     generated = generate(
         model,
         tokenizer,
@@ -272,13 +273,14 @@ def eval_path_qa(
         completions.append(completion)
         answers.append(answer)
         terminated = len(full) < limit - 1  # BOS is not present in returned text
-        result = validate_qa_answer(language, answer, sample.query_vertices)
+        result = validate_qa_answer(language, answer, sample.query_vertices, allow_repeats=allow_repeats)
         cot_result = validate_segment_cot(
             language,
             parsed["cot_segments"],
             sample.query_vertices,
             result["walk"],
             answer,
+            allow_repeats=allow_repeats,
         )
         if cot_enabled:
             cot_counts["format_valid"] += int(parsed["format_valid"])
@@ -370,6 +372,7 @@ def eval_path_qa(
         "temperature": temperature,
         "n_samples": total,
         "cot_mode": cot_mode,
+        "allow_repeats": allow_repeats,
         **{f"{key}_pct": 100.0 * value / total for key, value in counts.items()},
         "mean_generated_answer_bits": sum(map(len, answers)) / total,
         "mean_generated_completion_chars": sum(map(len, completions)) / total,
@@ -504,6 +507,7 @@ def format_report(report: dict) -> str:
         if key == "path_qa":
             lines.append(
                 f"  path-QA tau={res['temperature']} n={res['n_samples']}  "
+                f"policy={'walk (repeats allowed)' if res.get('allow_repeats', False) else 'piecewise-simple'}  "
                 f"decodable {res['answer_decodable_pct']:.1f}%  "
                 f"valid-walk {res['valid_walk_pct']:.1f}%  "
                 f"semantic {res['semantic_success_pct']:.1f}%  "

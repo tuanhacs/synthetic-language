@@ -86,9 +86,10 @@ variable: the code property.
 
 The generator supports the original language-modeling task and a conditional
 path-QA task. In path-QA, the question is a sequence of waypoint vertices and
-the answer concatenates one simple graph path for every consecutive waypoint
-pair. Vertices may repeat across different segments; only each individual
-segment must be simple. By default the serialized training text is
+the answer concatenates one graph route for every consecutive waypoint
+pair. By default each segment is simple; `allow_repeats: true` permits cycles
+within segments too. Vertices may always repeat across different segments.
+By default the serialized training text is
 `query_bits_answer_bits`. With `cot_mode: segments`, it is
 `query_bits_segment_1_bits_..._segment_(L-1)_bits_answer_bits`: each rationale
 field is the simple route for one consecutive waypoint pair, and the final
@@ -100,6 +101,7 @@ answer. `_` is the only separator; no extra token type is introduced.
 task:
   type: path-qa
   cot_mode: none                # none | segments
+  allow_repeats: false          # true = bounded walks; false = simple segments
   query_len: [2, 4]
   segment_len: [2, 14]
   path_trials: 1000
@@ -759,6 +761,36 @@ bash scripts/sweep_path_qa.sh \
   --latent-pool ./data/outputs/latent_iid_q2-4_seed0_3m \
   --output-root ./model/outputs/path_qa_sweeps/iid_paired_reversal_none_seed0
 ```
+
+### Allowing repeated vertices inside QA segments
+
+Add `--allow-repeats` to the server sweep, or set `task.allow_repeats: true` in
+the data YAML. This applies to IID, held-out pairs and cross-region, with either
+disjoint or overlap codebooks, no CoT or segment CoT, and paired reversal.
+
+Each segment is a bounded random walk from its first waypoint to the next.
+Neighbors are sampled uniformly; visited vertices/edges are not excluded.
+The walk stops on its first permitted target hit. Target entry is disallowed
+before `segment_len.min` vertices; attempts that cannot reach the target within
+`segment_len.max` are rejected/retried, up to `path_trials`. Length counts include
+both endpoints. No exact length is sampled, no cycle is required, and the sampler
+is not uniform over all possible walks. Cross-region train/valid walks remain
+inside their assigned region. Repeat-enabled segment lengths may exceed the
+graph's vertex count.
+
+Evaluation reads this policy from the dataset manifest. With repeats allowed,
+semantic success requires a graph-valid decoded answer with correct endpoints
+and ordered waypoints; it no longer requires piecewise simplicity. Segment-CoT
+success likewise permits loops but still checks count, decoding, valid edges and
+segment endpoints. Final-consistency checks are unchanged. `piecewise_simple`
+and CoT `segments_simple` remain diagnostic metrics, not success requirements.
+Reports and sweep results include `allow_repeats` to distinguish the objectives.
+
+The default remains `false` for old configs/checkpoints. Old simple-path config
+hashes/latent-pool contracts are preserved. **Generate a new latent pool and use
+a new output root for `--allow-repeats`; an old simple-path pool cannot be reused
+as repeat-enabled training data.** No model architecture/tokenizer changes are
+needed.
 
 ### Adding UD and W&B to the server sweep
 

@@ -149,6 +149,18 @@ All results are **mean ± sample standard deviation** across the five training s
 | 1.8M | 94.80 ± 1.68 | 92.64 ± 1.64 |
 | 2.0M | 96.08 ± 1.08 | 92.14 ± 1.46 |
 
+## IID prefix/suffix sweep — Query 2–6, Without CoT
+
+IID, disjoint assignment, query length 2–6, model `d512-L10-H8`. Success is reported as **mean ± sample standard deviation** across three runs (`n=3`, `ddof=1`).
+
+| Train pairs | Prefix individual success (%) | Prefix success (%) | Suffix individual success (%) | Suffix success (%) |
+|---:|---|---:|---|---:|
+| 1.6M | 98.1, 97.7, 97.6 | 97.80 ± 0.26 | 97.5, 97.2, 97.1 | 97.27 ± 0.21 |
+| 1.8M | 99.3, 98.3, 97.8 | 98.47 ± 0.76 | 97.5, 97.1, 97.2 | 97.27 ± 0.21 |
+| 2.0M | 98.5, 98.4, 98.9 | 98.60 ± 0.26 | 97.4, 96.8, 97.1 | 97.10 ± 0.30 |
+| 2.2M | 98.5, 98.6, 98.9 | 98.67 ± 0.21 | 96.3, 96.0, 97.3 | 96.53 ± 0.68 |
+| 2.4M | 99.1, 98.7, 99.7 | 99.17 ± 0.50 | 98.4, 97.8, 97.6 | 97.93 ± 0.42 |
+
 ## Paired prefix/suffix reversal — Without CoT
 
 ### Experiment setup

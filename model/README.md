@@ -261,6 +261,17 @@ The outputs are `cross_region_analysis.json` and
 
 ---
 
+### Repeat-enabled QA evaluation
+
+When the dataset has `task.allow_repeats: true`, final-answer success requires
+a valid graph walk, correct start/end and waypoints in order, without a simplicity
+requirement. CoT success also allows repeated vertices within segments while
+retaining endpoint and final-consistency checks. Simplicity metrics remain
+reported as diagnostics. The evaluator, data inspector and cross-region analysis
+all use the dataset policy; old manifests without the field retain simple-path
+semantics. Evaluation JSON records `allow_repeats` and console output prints the
+active policy. Generate repeat-enabled datasets with the sweep's `--allow-repeats`.
+
 ## 5. Data pipeline (`data.py`)
 
 **Frozen mode** — `synthdata.storage.load_dataset` → `BitTokenizer.pack` into

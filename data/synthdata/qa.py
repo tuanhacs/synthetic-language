@@ -1,10 +1,11 @@
-"""Path-QA samples and piecewise-simple route generation."""
+"""Path-QA samples: simple segments or bounded walks with optional repeats."""
 
 from __future__ import annotations
 
 import random
 from collections import Counter
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import AbstractSet, Any, Sequence
 
 from .config import DataConfig, TaskConfig
@@ -127,6 +128,7 @@ def validate_segment_cot(
     query: Sequence[int],
     final_walk: Sequence[int] = (),
     final_bits: str | None = None,
+    *, allow_repeats: bool = False,
 ) -> dict[str, Any]:
     """Validate segment rationale fields and their consistency with a final walk."""
     expected = max(0, len(query) - 1)
@@ -174,7 +176,8 @@ def validate_segment_cot(
         and final_bits is not None
         and merged_surface == final_bits
     )
-    success = bool(count_ok and all_decodable and all_valid and endpoints and all_simple)
+    success = bool(count_ok and all_decodable and all_valid and endpoints
+                   and (allow_repeats or all_simple))
     return {
         "segment_count_correct": count_ok,
         "segments_decodable": bool(all_decodable),
@@ -308,7 +311,7 @@ def is_piecewise_simple_answer(walk: Sequence[int], query: Sequence[int]) -> boo
 
 
 def validate_qa_answer(
-    language: Language, answer_bits: str, query: Sequence[int]
+    language: Language, answer_bits: str, query: Sequence[int], *, allow_repeats: bool = False,
 ) -> dict[str, Any]:
     """Semantic QA checks; any valid alternative route is accepted."""
     decodable = language.is_decodable(answer_bits)
@@ -326,7 +329,8 @@ def validate_qa_answer(
         "correct_end": correct_end,
         "waypoints_in_order": ordered,
         "piecewise_simple": piecewise_simple,
-        "semantic_success": bool(correct_start and correct_end and piecewise_simple),
+        "semantic_success": bool(correct_start and correct_end and ordered
+                                 and (allow_repeats or piecewise_simple)),
         "walk": walk,
     }
 
@@ -376,6 +380,61 @@ def random_simple_path(
 
         if search(start):
             return tuple(path)
+    return None
+
+
+@lru_cache(maxsize=512)
+def _target_distances(graph: GridGraph, end: int,
+                      allowed: frozenset[int] | None) -> tuple[int, ...]:
+    distances = [-1] * graph.num_vertices
+    distances[end] = 0
+    frontier = [end]
+    for vertex in frontier:
+        for nxt in graph.neighbors(vertex):
+            if distances[nxt] < 0 and (allowed is None or nxt in allowed):
+                distances[nxt] = distances[vertex] + 1
+                frontier.append(nxt)
+    return tuple(distances)
+
+
+def random_bounded_walk(
+    language: Language | GridGraph,
+    start: int,
+    end: int,
+    length_range: tuple[int, int],
+    rng: random.Random,
+    trials: int,
+    allowed_vertices: AbstractSet[int] | None = None,
+) -> tuple[int, ...] | None:
+    """Random walk stopping at first permitted target hit; repeats optional.
+
+    No exact length is sampled. Neighbors are chosen uniformly, except target
+    entry is forbidden until the minimum vertex count. Failed attempts hitting
+    the maximum count are discarded and retried. This is not uniform over walks.
+    """
+    graph = language.graph if isinstance(language, Language) else language
+    if allowed_vertices is not None and (start not in allowed_vertices or end not in allowed_vertices):
+        return None
+    lo, hi = length_range
+    # Cheap impossibility check, including disconnected allowed subgraphs.
+    distances = _target_distances(graph, end,
+        None if allowed_vertices is None else frozenset(allowed_vertices))
+    if distances[start] < 0 or distances[start] + 1 > hi:
+        return None
+    for _ in range(trials):
+        path = [start]
+        while len(path) < hi:
+            if distances[path[-1]] > hi - len(path):
+                break  # no continuation of this attempt can fit the cap
+            neighbors = [v for v in graph.neighbors(path[-1])
+                         if (allowed_vertices is None or v in allowed_vertices)
+                         and (v != end or len(path) + 1 >= lo)]
+            if not neighbors:
+                break
+            vertex = rng.choice(neighbors)
+            path.append(vertex)
+            if vertex == end:
+                return tuple(path)
     return None
 
 
@@ -481,7 +540,8 @@ def sample_latent_qa(
 
     segments: list[tuple[int, ...]] = []
     for start, end in zip(waypoints, waypoints[1:]):
-        segment = random_simple_path(
+        segment_generator = random_bounded_walk if task.allow_repeats else random_simple_path
+        segment = segment_generator(
             graph,
             start,
             end,

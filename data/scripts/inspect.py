@@ -160,7 +160,8 @@ def main(argv: list[str] | None = None) -> int:
             counters = Counter()
             for sample in splits.test[: args.validate]:
                 assert isinstance(sample, QASample)
-                result = validate_qa_answer(lang, sample.answer_bits, sample.query_vertices)
+                result = validate_qa_answer(lang, sample.answer_bits, sample.query_vertices,
+                                            allow_repeats=cfg.task.allow_repeats)
                 for key in (
                     "decodable", "valid_walk", "correct_start", "correct_end",
                     "waypoints_in_order", "piecewise_simple", "semantic_success",
@@ -173,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
                         sample.query_vertices,
                         result["walk"],
                         sample.answer_bits,
+                        allow_repeats=cfg.task.allow_repeats,
                     )
                     counters["cot_success"] += int(cot["cot_success"])
                     counters["cot_final_consistent"] += int(cot["final_consistent"])

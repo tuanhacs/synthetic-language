@@ -66,6 +66,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--qa-mode", choices=("iid", "heldout", "cross-region"), default="cross-region")
     ap.add_argument("--assignment", choices=("disjoint", "overlap"), default="overlap")
     ap.add_argument("--cot-mode", choices=("none", "segments"), default="segments")
+    ap.add_argument("--allow-repeats", action="store_true",
+                    help="allow cycles inside QA segments; semantic/CoT success does not require simple paths")
     ap.add_argument("--grid-size", type=int, default=6)
     ap.add_argument("--query-min", type=int, default=2)
     ap.add_argument("--query-max", type=int, default=4)
@@ -153,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
                 and not key.startswith("wandb")}
     # Preserve settings identity for existing step-only sweeps with all new
     # options disabled/defaulted.
-    for key, default in (("paired_reversal", False), ("train_seed", None), ("lr_decay_steps", None), ("eval_batches", 20),
+    for key, default in (("allow_repeats", False), ("paired_reversal", False), ("train_seed", None), ("lr_decay_steps", None), ("eval_batches", 20),
                          ("early_stopping_patience", 0), ("early_stopping_min_delta", 0.0)):
         if settings[key] == default:
             settings.pop(key)
@@ -174,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
         "pair_direction": "unordered", "held_out_pairs": pairs,
         "region_overlap_rows": args.region_overlap_rows,
     }
+    if args.allow_repeats:
+        task["allow_repeats"] = True
 
     def data_config(kind: str) -> dict:
         language = {
@@ -352,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
                     "train_pairs_actual": manifest["stats"]["splits"]["train"]["query_pair_occurrences"],
                     "qa_mode": args.qa_mode, "assignment": args.assignment,
                     "cot_mode": args.cot_mode, "query_len": [args.query_min, args.query_max],
+                    "allow_repeats": args.allow_repeats,
                     "d_model": args.d_model, "n_layers": args.n_layers, "n_heads": args.n_heads,
                     "temperature": args.temperature, "n_samples": metrics["n_samples"],
                     "decodable_pct": metrics["answer_decodable_pct"],

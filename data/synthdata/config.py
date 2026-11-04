@@ -182,6 +182,7 @@ class TaskConfig:
     held_out_pairs: tuple[tuple[int, int], ...] = ()
     region_overlap_rows: int = 2
     cot_mode: str = "none"
+    allow_repeats: bool = False  # permit repeated vertices/edges within QA segments
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": self.type}
@@ -196,6 +197,9 @@ class TaskConfig:
                 region_overlap_rows=self.region_overlap_rows,
                 cot_mode=self.cot_mode,
             )
+            # Preserve legacy config hashes / latent-pool contracts by default.
+            if self.allow_repeats:
+                out["allow_repeats"] = True
         return out
 
 
@@ -288,7 +292,7 @@ def _task_config(raw: Any) -> TaskConfig:
         raise ConfigError("task must be a mapping")
     unknown = set(raw) - {
         "type", "query_len", "segment_len", "path_trials", "split_mode",
-        "pair_direction", "held_out_pairs", "region_overlap_rows", "cot_mode",
+        "pair_direction", "held_out_pairs", "region_overlap_rows", "cot_mode", "allow_repeats",
     }
     if unknown:
         raise ConfigError(f"unknown task fields: {sorted(unknown)}")
@@ -311,6 +315,7 @@ def _task_config(raw: Any) -> TaskConfig:
         held_out_pairs=pairs,
         region_overlap_rows=int(raw.get("region_overlap_rows", 2)),
         cot_mode=str(raw.get("cot_mode", "none")),
+        allow_repeats=raw.get("allow_repeats", False),
     )
 
 
@@ -493,12 +498,14 @@ def validate_config(cfg: Config) -> list[str]:
 
     task = cfg.task
     if task.type == "path-qa":
+        if not isinstance(task.allow_repeats, bool):
+            raise ConfigError("task.allow_repeats must be a boolean")
         qlo, qhi = task.query_len
         slo, shi = task.segment_len
         if qlo < 2 or qhi > n_v:
             raise ConfigError(f"task.query_len must lie in [2, |V|={n_v}]")
-        if slo < 2 or shi > n_v:
-            raise ConfigError(f"task.segment_len must lie in [2, |V|={n_v}]")
+        if slo < 2 or (not task.allow_repeats and shi > n_v):
+            raise ConfigError(f"task.segment_len must start at >= 2; simple paths cannot exceed |V|={n_v}")
         if task.path_trials < 1:
             raise ConfigError("task.path_trials must be >= 1")
         if task.cot_mode not in COT_MODES:

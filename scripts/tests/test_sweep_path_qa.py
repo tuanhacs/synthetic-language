@@ -156,6 +156,35 @@ class SweepTests(unittest.TestCase):
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             sweep.main(["--paired-reversal", "--code-types", "ud", "--dry-run"])
 
+    def test_repeat_policy_reaches_dataset_config_and_results(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "repeat-sweep"
+            arguments = ["--output-root", str(output), "--allow-repeats", "--code-types", "prefix",
+                "--pool-train-pairs", "30", "--train-min", "20", "--train-max", "20",
+                "--valid-query-pairs", "10", "--test-query-pairs", "10",
+                "--qa-mode", "iid", "--assignment", "disjoint", "--cot-mode", "none",
+                "--max-steps", "10", "--eval-samples", "1"]
+            real_run = sweep.run
+            def run(script, args, log, dry_run):
+                if script == "model/scripts/train.py":
+                    cfg = yaml.safe_load(Path(args[0]).read_text())
+                    manifest = json.loads((Path(cfg["data"]["dataset_dir"]) / "manifest.json").read_text())
+                    self.assertTrue(manifest["config"]["task"]["allow_repeats"])
+                    directory = Path(cfg["train"]["out_dir"])
+                    directory.mkdir(parents=True)
+                    (directory / "best.pt").write_bytes(b"fake GPU")
+                elif script == "model/scripts/evaluate.py":
+                    directory = Path(args[0]).parent
+                    (directory / "eval_report.json").write_text(json.dumps({"generation": {"path_qa": {
+                        "n_samples": 1, "answer_decodable_pct": 100., "semantic_success_pct": 100.,
+                    }}}))
+                else:
+                    real_run(script, args, log, dry_run)
+            with patch.object(sweep, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+                sweep.main(arguments)
+            row = json.loads((output / "results.json").read_text())[0]
+            self.assertTrue(row["allow_repeats"])
+
 
 if __name__ == "__main__":
     unittest.main()

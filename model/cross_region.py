@@ -65,8 +65,10 @@ def _walk_events(
     answer_bits: str,
     terminated: bool,
     overlap_rows: int,
+    allow_repeats: bool = False,
 ) -> dict[str, Any]:
-    semantic = validate_qa_answer(language, answer_bits, sample.query_vertices)
+    semantic = validate_qa_answer(language, answer_bits, sample.query_vertices,
+                                  allow_repeats=allow_repeats)
     direction, source, target, overlap = _relative_bands(
         sample, language.graph.n, overlap_rows
     )
@@ -343,6 +345,7 @@ def analyze_cross_region(
         raise ValueError("cross-region analysis requires split_mode: cross-region")
     overlap_rows = int(task.get("region_overlap_rows", 2))
     cot_mode = str(task.get("cot_mode", "none"))
+    allow_repeats = bool(task.get("allow_repeats", False))
     cot_enabled = cot_mode == "segments"
     grid_n = data.language.graph.n
     candidates = list(data.test_samples)
@@ -402,7 +405,7 @@ def analyze_cross_region(
                 terminated = len(full) < max_len - 1
                 if cot_enabled:
                     final_result = validate_qa_answer(
-                        data.language, answer, sample.query_vertices
+                        data.language, answer, sample.query_vertices, allow_repeats=allow_repeats
                     )
                     cot_result = validate_segment_cot(
                         data.language,
@@ -410,6 +413,7 @@ def analyze_cross_region(
                         sample.query_vertices,
                         final_result["walk"],
                         answer,
+                        allow_repeats=allow_repeats,
                     )
                     cot_events["n"] += 1
                     cot_events["format_valid"] += int(parsed["format_valid"])
@@ -430,6 +434,7 @@ def analyze_cross_region(
                             data.language,
                             segment_bits,
                             sample.query_vertices[segment_index : segment_index + 2],
+                            allow_repeats=allow_repeats,
                         )
                         segment_acc = cot_by_segment[segment_index]
                         segment_acc["n"] += 1
@@ -437,7 +442,7 @@ def analyze_cross_region(
                             segment_result["semantic_success"]
                         )
                 event = _walk_events(
-                    data.language, sample, answer, terminated, overlap_rows
+                    data.language, sample, answer, terminated, overlap_rows, allow_repeats=allow_repeats
                 )
                 _add(overall, event)
                 _add(query_acc, event)
@@ -564,6 +569,7 @@ def analyze_cross_region(
         "temperature": temperature,
         "seed": seed,
         "region_overlap_rows": overlap_rows,
+        "allow_repeats": allow_repeats,
         "overall": _finalise(overall),
         "per_query_uncertainty": {
             "mean_cross_probability": _mean(per_query_cross),
