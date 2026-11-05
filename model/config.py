@@ -132,15 +132,18 @@ class TrainConfig:
 @dataclass(frozen=True)
 class TestNoiseConfig:
     sample_rate: float = 1.0
-    codeword_occurrences: tuple[int, int] = (1, 3)
-    bit_flips_per_occurrence: tuple[int, int] = (1, 2)
+    codeword_occurrences: tuple[int, int] | None = None
+    bit_flips_per_occurrence: tuple[int, int] | None = None
     seed: int = 0
     mode: str = "random"
+    max_total_flips: int | None = None
+    max_attempts: int = 100
 
     def as_query_noise(self) -> TrainNoiseConfig:
         return TrainNoiseConfig(sample_rate=self.sample_rate, scope="query",
             codeword_occurrences=self.codeword_occurrences,
-            bit_flips_per_occurrence=self.bit_flips_per_occurrence, seed=self.seed, mode=self.mode)
+            bit_flips_per_occurrence=self.bit_flips_per_occurrence, seed=self.seed, mode=self.mode,
+            max_total_flips=self.max_total_flips, max_attempts=self.max_attempts)
 
     def __post_init__(self) -> None:
         try:

@@ -570,9 +570,12 @@ def format_report(report: dict) -> str:
                 lines.append(f"         query noise: {noise['corrupted_samples']}/{noise['test_samples']} "
                              f"selected test examples; {noise['flipped_bits']} flipped bits")
                 if "skipped_no_safe_flip" in noise:
+                    reason = "ineligible/attempt limit" if "skipped_attempt_limit" in noise else "no safe flip"
                     lines.append(f"         recoverable noise: requested={noise['requested_samples']}; "
-                                 f"skipped(no safe flip)={noise['skipped_no_safe_flip']}; "
+                                 f"skipped({reason})={noise['skipped_no_safe_flip']}; "
                                  f"actual rate={noise['actual_sample_rate']:.2%}")
+                    lines.append(f"         recoverable noise histograms: bits={noise['total_flips_histogram']}; "
+                                 f"occurrences={noise['noised_occurrences_histogram']}")
                 for name, group in noise["by_group"].items():
                     detail = (f"  decodable {group['answer_decodable_pct']:.1f}%  "
                               f"semantic {group['semantic_success_pct']:.1f}%" if group["n"] else "")

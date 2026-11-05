@@ -57,8 +57,10 @@ def main() -> int:
     ap.add_argument("--test-noise-codewords", type=int, nargs=2, default=None, metavar=("MIN", "MAX"))
     ap.add_argument("--test-noise-bits", type=int, nargs=2, default=None, metavar=("MIN", "MAX"))
     ap.add_argument("--test-noise-seed", type=int, default=None)
+    ap.add_argument("--test-noise-max-total-flips", type=int, default=None)
+    ap.add_argument("--test-noise-max-attempts", type=int, default=None)
     ap.add_argument("--test-noise-mode", choices=("random", "recoverable"), default=None,
-                    help="recoverable: query-only, exactly one bit, uniquely recoverable within radius 1")
+                    help="recoverable: query-only, uniquely recoverable within the total flip budget")
     args = ap.parse_args()
 
     device = resolve_device(args.device)
@@ -86,6 +88,8 @@ def main() -> int:
         "bit_flips_per_occurrence": tuple(args.test_noise_bits) if args.test_noise_bits is not None else None,
         "seed": args.test_noise_seed,
         "mode": args.test_noise_mode,
+        "max_total_flips": args.test_noise_max_total_flips,
+        "max_attempts": args.test_noise_max_attempts,
     }.items() if value is not None}
     if args.test_noise is False:
         if noise_overrides:
@@ -93,7 +97,13 @@ def main() -> int:
         eval_cfg = dataclasses.replace(eval_cfg, test_noise=None)
     elif args.test_noise or noise_overrides:
         try:
-            noise_cfg = dataclasses.replace(eval_cfg.test_noise or TestNoiseConfig(), **noise_overrides)
+            if eval_cfg.test_noise is None:
+                noise_cfg = TestNoiseConfig(**noise_overrides)
+            else:
+                if "mode" in noise_overrides and noise_overrides["mode"] != eval_cfg.test_noise.mode:
+                    for key in ("codeword_occurrences", "bit_flips_per_occurrence"):
+                        noise_overrides.setdefault(key, None)
+                noise_cfg = dataclasses.replace(eval_cfg.test_noise, **noise_overrides)
         except (ConfigError, TypeError) as exc:
             ap.error(str(exc))
         eval_cfg = dataclasses.replace(eval_cfg, test_noise=noise_cfg)

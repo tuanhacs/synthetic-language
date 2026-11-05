@@ -146,19 +146,22 @@ class NoiseConfig:
 class TrainNoiseConfig:
     sample_rate: float = 0.05
     scope: str = "both"  # query | answer (final only) | both; CoT fields stay clean
-    codeword_occurrences: tuple[int, int] = (1, 3)
-    bit_flips_per_occurrence: tuple[int, int] = (1, 2)
+    codeword_occurrences: tuple[int, int] | None = None
+    bit_flips_per_occurrence: tuple[int, int] | None = None
     seed: int = 0
     mode: str = "random"
+    max_total_flips: int | None = None
+    max_attempts: int = 100
 
     def __post_init__(self) -> None:
         if self.mode not in ("random", "recoverable"):
             raise ConfigError("noise.mode must be random or recoverable")
+        if self.codeword_occurrences is None:
+            object.__setattr__(self, "codeword_occurrences", (1, 1) if self.mode == "recoverable" else (1, 3))
+        if self.bit_flips_per_occurrence is None:
+            object.__setattr__(self, "bit_flips_per_occurrence", (1, 1) if self.mode == "recoverable" else (1, 2))
         if self.mode == "recoverable":
-            # This mode has a fixed, certified corruption budget, not random-noise ranges.
             object.__setattr__(self, "scope", "query")
-            object.__setattr__(self, "codeword_occurrences", (1, 1))
-            object.__setattr__(self, "bit_flips_per_occurrence", (1, 1))
         if isinstance(self.sample_rate, bool) or not isinstance(self.sample_rate, (int, float)) or not 0 <= self.sample_rate <= 1:
             raise ConfigError("data.train_noise.sample_rate must be in [0, 1]")
         if self.scope not in ("query", "answer", "both"):
@@ -171,9 +174,19 @@ class TrainNoiseConfig:
                 raise ConfigError(f"data.train_noise.{name} must be a positive [min, max] integer pair")
         if isinstance(self.seed, bool) or not isinstance(self.seed, int):
             raise ConfigError("data.train_noise.seed must be an integer")
+        if isinstance(self.max_attempts, bool) or not isinstance(self.max_attempts, int) or self.max_attempts < 1:
+            raise ConfigError("noise.max_attempts must be a positive integer")
+        if self.max_total_flips is not None:
+            if (isinstance(self.max_total_flips, bool) or not isinstance(self.max_total_flips, int)
+                    or self.max_total_flips < self.codeword_occurrences[0] * self.bit_flips_per_occurrence[0]):
+                raise ConfigError("noise.max_total_flips must accommodate the minimum occurrences * bits")
+        if self.mode != "recoverable" and (self.max_total_flips is not None or self.max_attempts != 100):
+            raise ConfigError("noise.max_total_flips/max_attempts require mode=recoverable")
 
     def to_dict(self) -> dict[str, Any]:
         return {**({"mode": self.mode} if self.mode != "random" else {}),
+                **({"max_total_flips": self.max_total_flips} if self.max_total_flips is not None else {}),
+                **({"max_attempts": self.max_attempts} if self.max_attempts != 100 else {}),
                 "sample_rate": self.sample_rate, "scope": self.scope,
                 "codeword_occurrences": list(self.codeword_occurrences),
                 "bit_flips_per_occurrence": list(self.bit_flips_per_occurrence), "seed": self.seed}
@@ -379,7 +392,7 @@ def _train_noise_config(raw: Any) -> TrainNoiseConfig | None:
         return None
     if not isinstance(raw, dict):
         raise ConfigError("data.train_noise must be null or a mapping")
-    unknown = set(raw) - {"sample_rate", "scope", "codeword_occurrences", "bit_flips_per_occurrence", "seed", "mode"}
+    unknown = set(raw) - set(TrainNoiseConfig.__dataclass_fields__)
     if unknown:
         raise ConfigError(f"unknown data.train_noise fields: {sorted(unknown)}")
     values = dict(raw)

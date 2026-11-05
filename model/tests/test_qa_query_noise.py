@@ -30,6 +30,27 @@ from synthdata.tokenizer import BitTokenizer
 
 
 class QueryNoiseTests(unittest.TestCase):
+    def test_multibit_noise_config_and_evaluation_keep_clean_labels(self):
+        self.language = Language(make_grid(2), Codebooks((("000000000000",), ("111111110000",),
+                                 ("111100001111",), ("000011111111",))), (2, 10))
+        self.model.cfg.context_len = 512
+        noise = TestNoiseConfig(mode="recoverable", sample_rate=1, codeword_occurrences=(2, 2),
+                                bit_flips_per_occurrence=(1, 2), max_total_flips=3, max_attempts=20)
+        cfg = Config(eval=EvalConfig(test_noise=noise))
+        raw = cfg.to_dict()
+        raw.pop("path")
+        self.assertEqual(parse_config(raw).eval.test_noise, noise)
+        for cot in ("none", "segments"):
+            samples = self.samples(cot=cot)
+            def responses(*args, **kwargs):
+                return [prefix + s.clean_bits[len(s.query_bits) + 1:]
+                        for prefix, s in zip(kwargs["prefix_bits"], samples)]
+            with patch.object(evals, "generate", side_effect=responses):
+                report = evals.eval_path_qa(self.model, self.language, self.tok, samples,
+                    n_samples=10, test_noise=noise, task_config={"query_len": [2, 4], "cot_mode": cot})
+            self.assertEqual(report["semantic_success_pct"], 100.)
+            self.assertEqual(report["test_noise"]["noised_occurrences_histogram"], {"2": 10})
+
     def test_recoverable_noise_keeps_clean_intent_in_both_answer_formats(self):
         self.language = Language(make_grid(2), Codebooks((("00000",), ("11100",),
                                  ("10011",), ("01111",))), (2, 10))

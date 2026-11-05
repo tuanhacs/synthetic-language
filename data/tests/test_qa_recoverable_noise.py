@@ -18,6 +18,62 @@ def language(books):
 
 
 class RecoverableNoiseTests(unittest.TestCase):
+    def test_multibit_checker_matches_exhaustive_oracle(self):
+        books = (("0", "01"), ("110",), ("10",))
+        checker = QueryRecoveryChecker(language(books), (1, 3))
+        queries = []
+        for length in range(1, 4):
+            for vertices in itertools.product(range(3), repeat=length):
+                for words in itertools.product(*(books[v] for v in vertices)):
+                    queries.append(("".join(words), vertices))
+        for bits, expected in queries[:70]:
+            for radius in (0, 1, 2, 3):
+                noisy = bits.translate(str.maketrans("01", "10"))[:radius] + bits[radius:]
+                candidates = {vertices for clean, vertices in queries if len(clean) == len(noisy)
+                              and sum(a != b for a, b in zip(clean, noisy)) <= radius}
+                self.assertEqual(checker.uniquely_recovers(noisy, expected, radius), candidates == {expected})
+
+    def test_multiple_occurrences_bits_budget_and_histograms(self):
+        lang = language((("00000000",), ("11111111",)))
+        samples = tuple(QASample("0000000011111111", "0011", (0, 1), (0, 1),
+            (8, 16), (2, 4), (2,), ("0011",), f"multi:{i}") for i in range(30))
+        cfg = TrainNoiseConfig(mode="recoverable", sample_rate=1, codeword_occurrences=(2, 2),
+                               bit_flips_per_occurrence=(1, 2), max_total_flips=3, max_attempts=20)
+        result, report = apply_train_noise(samples, cfg, language=lang, query_len=(2, 4))
+        self.assertEqual(result, apply_train_noise(samples, cfg, language=lang, query_len=(2, 4))[0])
+        self.assertEqual(report["corrupted_samples"], 30)
+        self.assertEqual(report["noised_occurrences_histogram"], {"2": 30})
+        self.assertEqual(set(report["total_flips_histogram"]), {"2", "3"})
+        checker = QueryRecoveryChecker(lang, (2, 4))
+        for s in result:
+            total = sum(len(e["bit_indices"]) for e in s.noise_edits)
+            self.assertEqual(sum(a != b for a, b in zip(s.query_bits, s.bits[:16])), total)
+            self.assertTrue(checker.uniquely_recovers(s.bits[:16], s.query_vertices, total))
+            self.assertEqual(s.bits[16:], s.clean_bits[16:])
+            self.assertEqual(len({e["codeword_index"] for e in s.noise_edits}), 2)
+        _, test_report = apply_query_noise(samples, cfg, language=lang, query_len=(2, 4))
+        self.assertEqual(test_report["corrupted_samples"], 30)
+
+    def test_multibit_one_occurrence_and_ambiguous_budget_not_relaxed(self):
+        safe = language((("00000000",), ("11111111",)))
+        s = QASample("0000000011111111", "01", (0, 1), (0, 1), (8, 16), (1, 2), (2,))
+        cfg = TrainNoiseConfig(mode="recoverable", sample_rate=1, codeword_occurrences=(1, 1),
+                               bit_flips_per_occurrence=(2, 2), max_attempts=5)
+        result, report = apply_train_noise((s,), cfg, language=safe, query_len=(2, 4))
+        self.assertEqual(report["total_flips_histogram"], {"2": 1})
+        self.assertEqual(len(result[0].noise_edits[0]["bit_indices"]), 2)
+        ambiguous = language((("0000",), ("1111",)))
+        s = QASample("00001111", "01", (0, 1), (0, 1), (4, 8), (1, 2), (2,))
+        result, report = apply_train_noise((s,), cfg, language=ambiguous, query_len=(2, 4))
+        self.assertEqual(result, (s,))
+        self.assertEqual(report["skipped_attempt_limit"], 1)
+        self.assertEqual(report["requested_total_flips_histogram"], {"2": 1})
+        self.assertEqual(report["corrupted_samples"], 0)
+        self.assertLessEqual(report["candidate_attempts"], 5)
+        with self.assertRaises(ValueError):
+            TrainNoiseConfig(mode="recoverable", codeword_occurrences=(2, 2),
+                             bit_flips_per_occurrence=(2, 2), max_total_flips=3)
+
     def test_config_roundtrip_and_old_default_serialization(self):
         cfg = Config(language=LanguageConfig(code=CodeConfig(depth_range=(1, 4), power_x=6)),
                      data=DataConfig(train_noise=TrainNoiseConfig(mode="recoverable")),

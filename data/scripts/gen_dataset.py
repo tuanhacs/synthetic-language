@@ -212,9 +212,12 @@ def build(
             f"{train_noise_report['codeword_occurrences']} codeword occurrences; "
             f"{train_noise_report['flipped_bits']} flipped bits (valid/test clean)")
         if "skipped_no_safe_flip" in train_noise_report:
+            reason = "ineligible/attempt limit" if "skipped_attempt_limit" in train_noise_report else "no safe flip"
             log(f"recoverable noise: requested={train_noise_report['requested_samples']}; "
-                f"skipped(no safe flip)={train_noise_report['skipped_no_safe_flip']}; "
+                f"skipped({reason})={train_noise_report['skipped_no_safe_flip']}; "
                 f"actual rate={train_noise_report['actual_sample_rate']:.2%}")
+            log(f"recoverable noise histograms: bits={train_noise_report['total_flips_histogram']}; "
+                f"occurrences={train_noise_report['noised_occurrences_histogram']}")
     log(f"\npool: {len(pool)} clean-unique examples before noise, {sum(len(s.bits) for s in pool)} tokens")
     log(f"splits: {splits.sizes()} | bits {splits.total_bits()}")
     qa_stats_by_split = None

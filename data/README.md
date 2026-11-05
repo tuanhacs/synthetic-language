@@ -924,23 +924,48 @@ command line; configure credentials in the server environment or via `wandb logi
 
 Use `data.train_noise.mode: recoverable` (or the server sweep flag
 `--train-noise-mode recoverable --train-noise-rate 0.05`). This mode fixes the
-scope to query-only and the corruption to exactly one bit in one codeword
-occurrence; occurrence/bit ranges and scope options do not apply. Answers and
-CoT fields remain clean. Omit the mode to retain legacy random noise.
+scope to query-only. By default it still flips exactly one bit in one occurrence
+(legacy v1, with unchanged selection and edits). Answers and CoT fields remain
+clean. Omit the mode to retain legacy random noise.
 
-For each selected example, bit positions are tried in deterministic shuffled
-order. The mutated occurrence must not equal **any assigned codeword**, including
+For multi-bit noise, configure `codeword_occurrences: [1, 2]` and
+`bit_flips_per_occurrence: [1, 2]`, optionally `max_total_flips: 2` and
+`max_attempts: 100` inside `data.train_noise`. Sweep equivalents:
+
+```bash
+--train-noise-mode recoverable --train-noise-rate 0.20 \
+--train-noise-codewords 1 2 --train-noise-bits 1 2 \
+--train-noise-max-total-flips 2 --train-noise-max-attempts 100
+```
+
+This permits either two flips in one occurrence or one flip each in two
+occurrences, as well as one-bit noise. The total cap is optional; without it,
+the two configured ranges determine the maximum corruption. Occurrences are
+sampled without replacement and capped by query length; only words with enough
+bits for the configured minimum are eligible. The total cap is respected during
+sampling. Multi-bit mode samples occurrences and bit counts once per selected
+example, then retries only the positions, up to `max_attempts` draws. Duplicate
+patterns are not re-certified. It never retries with a smaller sampled budget to
+make a hard example pass. If no accepted pattern is found, the example stays
+clean; this does **not** prove that every possible pattern is unsafe.
+
+For legacy one-bit noise, bit positions are tried in deterministic shuffled
+order. Each mutated occurrence must not equal **any assigned codeword**, including
 shared answer words. A trie/DP then checks the entire noisy query against all
 private query codewords and all query lengths in `task.query_len`, with unknown
-word boundaries and a total Hamming budget of at most one bit. Every surviving
+word boundaries and a total Hamming budget of at most **B**, where B is the actual
+number of flipped bits across the entire query. Every surviving
 decoding must have the original vertex sequence. Different word representations
 of that same sequence are allowed. This checks a conservative superset of task
 queries: it does not consult graph adjacency, split/region constraints or answers.
 
-Only the requested SHA256-ranked subset is considered. If all bit positions fail,
+Only the requested SHA256-ranked subset is considered. When certification fails,
 the example stays clean; there is no backfill or relaxed certificate. Reports
 include `requested_samples`, `corrupted_samples`, `actual_sample_rate`,
-`skipped_no_safe_flip`, candidate attempts and rejection counts. This guarantee
+`skipped_no_safe_flip`, candidate attempts and rejection counts. Multi-bit v2
+also records `skipped_ineligible`, `skipped_attempt_limit`, requested-budget
+histograms, `total_flips_histogram` and `noised_occurrences_histogram` (accepted
+examples only). The legacy skip field includes both v2 skip reasons. This guarantee
 does not mean the model is automatically given a corrected query. It learns from
 the corrupted bits and the original clean target. Encoding can take longer due
 to certification, especially when few safe flips exist.

@@ -15,6 +15,23 @@ SPEC.loader.exec_module(sweep)
 
 
 class SweepTests(unittest.TestCase):
+    def test_multibit_flags_are_forwarded_without_overriding_ranges(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "dry-run"
+            log = io.StringIO()
+            with contextlib.redirect_stdout(log):
+                sweep.main(["--dry-run", "--output-root", str(output), "--code-types", "prefix",
+                    "--train-min", "20", "--train-max", "20", "--train-noise-mode", "recoverable",
+                    "--train-noise-codewords", "1", "2", "--train-noise-bits", "1", "2",
+                    "--train-noise-max-total-flips", "2", "--test-noise-mode", "recoverable",
+                    "--test-noise-codewords", "1", "2", "--test-noise-bits", "1", "2",
+                    "--test-noise-max-total-flips", "2", "--test-noise-max-attempts", "30"])
+            text = log.getvalue()
+            self.assertIn("--test-noise-codewords 1 2", text)
+            self.assertIn("--test-noise-bits 1 2", text)
+            self.assertIn("--test-noise-max-total-flips 2", text)
+            self.assertIn("--test-noise-max-attempts 30", text)
+
     def test_recoverable_flags_enable_noise_with_fixed_budget(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "dry-run"
