@@ -441,3 +441,20 @@ the deterministic `CUBLAS_WORKSPACE_CONFIG=:4096:8` workspace. An unsupported
 nondeterministic operation raises an error instead of silently weakening the
 guarantee. Reproduction still requires the same checkpoint/data, software stack,
 GPU architecture, batch size and other run parameters.
+
+## Certified recoverable noisy-query evaluation
+
+Add `--test-noise-mode recoverable --test-noise-rate 0.05` to
+`model/scripts/evaluate.py` or `scripts/sweep_path_qa.sh`. The mode also enables
+noisy testing. It fixes noise to one bit in one query occurrence and certifies
+unique recovery of the original vertex sequence within a one-bit budget over the
+**whole query**, including alternate word boundaries and configured query lengths.
+It does not use the answer or provide corrections to the model. Clean waypoint
+labels remain the scoring reference. Answer/CoT text is not corrupted.
+
+The noisy-query report records the requested number, actual corrupted number and
+samples skipped because no safe flip exists. Skipped examples belong to the clean
+subgroup, not the noisy subgroup. A sweep still evaluates clean test first and
+then noisy test separately; `--test-noise-mode random` retains the old behavior.
+For training use `--train-noise-mode recoverable --train-noise-rate 0.05`; choose a
+fresh `--output-root` for a changed training condition.

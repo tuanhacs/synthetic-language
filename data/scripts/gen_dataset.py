@@ -204,12 +204,17 @@ def build(
         splits = split_pool(pool, cfg.data.split, rng=rngs["split"])
     train_noise_report = None
     if cfg.data.train_noise is not None:
-        train, train_noise_report = apply_train_noise(splits.train, cfg.data.train_noise)
+        train, train_noise_report = apply_train_noise(splits.train, cfg.data.train_noise,
+            language=language, query_len=cfg.task.query_len)
         splits = Splits(train, splits.valid, splits.test)
         pool = [sample for _, split in splits.items() for sample in split]
         log(f"train noise: {train_noise_report['corrupted_samples']}/{len(train)} samples; "
             f"{train_noise_report['codeword_occurrences']} codeword occurrences; "
             f"{train_noise_report['flipped_bits']} flipped bits (valid/test clean)")
+        if "skipped_no_safe_flip" in train_noise_report:
+            log(f"recoverable noise: requested={train_noise_report['requested_samples']}; "
+                f"skipped(no safe flip)={train_noise_report['skipped_no_safe_flip']}; "
+                f"actual rate={train_noise_report['actual_sample_rate']:.2%}")
     log(f"\npool: {len(pool)} clean-unique examples before noise, {sum(len(s.bits) for s in pool)} tokens")
     log(f"splits: {splits.sizes()} | bits {splits.total_bits()}")
     qa_stats_by_split = None

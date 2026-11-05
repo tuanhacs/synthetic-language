@@ -135,15 +135,18 @@ class TestNoiseConfig:
     codeword_occurrences: tuple[int, int] = (1, 3)
     bit_flips_per_occurrence: tuple[int, int] = (1, 2)
     seed: int = 0
+    mode: str = "random"
 
     def as_query_noise(self) -> TrainNoiseConfig:
         return TrainNoiseConfig(sample_rate=self.sample_rate, scope="query",
             codeword_occurrences=self.codeword_occurrences,
-            bit_flips_per_occurrence=self.bit_flips_per_occurrence, seed=self.seed)
+            bit_flips_per_occurrence=self.bit_flips_per_occurrence, seed=self.seed, mode=self.mode)
 
     def __post_init__(self) -> None:
         try:
-            self.as_query_noise()
+            normalized = self.as_query_noise()
+            object.__setattr__(self, "codeword_occurrences", normalized.codeword_occurrences)
+            object.__setattr__(self, "bit_flips_per_occurrence", normalized.bit_flips_per_occurrence)
         except ValueError as exc:
             raise ConfigError(f"eval.test_noise: {exc}") from exc
 

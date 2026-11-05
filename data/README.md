@@ -919,3 +919,31 @@ Training/early-stopping curves and final test decodability/success are logged;
 local `results.json`, checkpoints, histograms and reports are still generated.
 Resume uses the saved W&B ID in each run directory. Do not put an API key on the
 command line; configure credentials in the server environment or via `wandb login`.
+
+## Recoverable query noise
+
+Use `data.train_noise.mode: recoverable` (or the server sweep flag
+`--train-noise-mode recoverable --train-noise-rate 0.05`). This mode fixes the
+scope to query-only and the corruption to exactly one bit in one codeword
+occurrence; occurrence/bit ranges and scope options do not apply. Answers and
+CoT fields remain clean. Omit the mode to retain legacy random noise.
+
+For each selected example, bit positions are tried in deterministic shuffled
+order. The mutated occurrence must not equal **any assigned codeword**, including
+shared answer words. A trie/DP then checks the entire noisy query against all
+private query codewords and all query lengths in `task.query_len`, with unknown
+word boundaries and a total Hamming budget of at most one bit. Every surviving
+decoding must have the original vertex sequence. Different word representations
+of that same sequence are allowed. This checks a conservative superset of task
+queries: it does not consult graph adjacency, split/region constraints or answers.
+
+Only the requested SHA256-ranked subset is considered. If all bit positions fail,
+the example stays clean; there is no backfill or relaxed certificate. Reports
+include `requested_samples`, `corrupted_samples`, `actual_sample_rate`,
+`skipped_no_safe_flip`, candidate attempts and rejection counts. This guarantee
+does not mean the model is automatically given a corrected query. It learns from
+the corrupted bits and the original clean target. Encoding can take longer due
+to certification, especially when few safe flips exist.
+
+Use a new encoded output directory when changing train-noise mode. The clean
+latent pool can be reused.

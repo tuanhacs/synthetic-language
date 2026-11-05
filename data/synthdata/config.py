@@ -149,8 +149,16 @@ class TrainNoiseConfig:
     codeword_occurrences: tuple[int, int] = (1, 3)
     bit_flips_per_occurrence: tuple[int, int] = (1, 2)
     seed: int = 0
+    mode: str = "random"
 
     def __post_init__(self) -> None:
+        if self.mode not in ("random", "recoverable"):
+            raise ConfigError("noise.mode must be random or recoverable")
+        if self.mode == "recoverable":
+            # This mode has a fixed, certified corruption budget, not random-noise ranges.
+            object.__setattr__(self, "scope", "query")
+            object.__setattr__(self, "codeword_occurrences", (1, 1))
+            object.__setattr__(self, "bit_flips_per_occurrence", (1, 1))
         if isinstance(self.sample_rate, bool) or not isinstance(self.sample_rate, (int, float)) or not 0 <= self.sample_rate <= 1:
             raise ConfigError("data.train_noise.sample_rate must be in [0, 1]")
         if self.scope not in ("query", "answer", "both"):
@@ -165,7 +173,8 @@ class TrainNoiseConfig:
             raise ConfigError("data.train_noise.seed must be an integer")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"sample_rate": self.sample_rate, "scope": self.scope,
+        return {**({"mode": self.mode} if self.mode != "random" else {}),
+                "sample_rate": self.sample_rate, "scope": self.scope,
                 "codeword_occurrences": list(self.codeword_occurrences),
                 "bit_flips_per_occurrence": list(self.bit_flips_per_occurrence), "seed": self.seed}
 
@@ -370,7 +379,7 @@ def _train_noise_config(raw: Any) -> TrainNoiseConfig | None:
         return None
     if not isinstance(raw, dict):
         raise ConfigError("data.train_noise must be null or a mapping")
-    unknown = set(raw) - {"sample_rate", "scope", "codeword_occurrences", "bit_flips_per_occurrence", "seed"}
+    unknown = set(raw) - {"sample_rate", "scope", "codeword_occurrences", "bit_flips_per_occurrence", "seed", "mode"}
     if unknown:
         raise ConfigError(f"unknown data.train_noise fields: {sorted(unknown)}")
     values = dict(raw)

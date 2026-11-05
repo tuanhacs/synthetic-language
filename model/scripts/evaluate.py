@@ -57,6 +57,8 @@ def main() -> int:
     ap.add_argument("--test-noise-codewords", type=int, nargs=2, default=None, metavar=("MIN", "MAX"))
     ap.add_argument("--test-noise-bits", type=int, nargs=2, default=None, metavar=("MIN", "MAX"))
     ap.add_argument("--test-noise-seed", type=int, default=None)
+    ap.add_argument("--test-noise-mode", choices=("random", "recoverable"), default=None,
+                    help="recoverable: query-only, exactly one bit, uniquely recoverable within radius 1")
     args = ap.parse_args()
 
     device = resolve_device(args.device)
@@ -83,6 +85,7 @@ def main() -> int:
         "codeword_occurrences": tuple(args.test_noise_codewords) if args.test_noise_codewords is not None else None,
         "bit_flips_per_occurrence": tuple(args.test_noise_bits) if args.test_noise_bits is not None else None,
         "seed": args.test_noise_seed,
+        "mode": args.test_noise_mode,
     }.items() if value is not None}
     if args.test_noise is False:
         if noise_overrides:

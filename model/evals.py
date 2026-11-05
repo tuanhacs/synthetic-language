@@ -222,7 +222,8 @@ def eval_path_qa(
     if test_noise is not None:
         # Corrupt each selected source sample once, even when n_samples wraps.
         base = list(test_samples[:min(n_samples, len(test_samples))])
-        noisy_base, noise_info = apply_query_noise(base, test_noise.as_query_noise())
+        noisy_base, noise_info = apply_query_noise(base, test_noise.as_query_noise(),
+            language=language, query_len=(task_config or {}).get("query_len"))
         noisy_selected = [noisy_base[i % len(noisy_base)] for i in range(n_samples)]
         prefixes = [s.bits[:len(s.query_bits)] + "_" for s in noisy_selected]
     cot_mode = str((task_config or {}).get("cot_mode", "none"))
@@ -568,6 +569,10 @@ def format_report(report: dict) -> str:
                 noise = res["test_noise"]
                 lines.append(f"         query noise: {noise['corrupted_samples']}/{noise['test_samples']} "
                              f"selected test examples; {noise['flipped_bits']} flipped bits")
+                if "skipped_no_safe_flip" in noise:
+                    lines.append(f"         recoverable noise: requested={noise['requested_samples']}; "
+                                 f"skipped(no safe flip)={noise['skipped_no_safe_flip']}; "
+                                 f"actual rate={noise['actual_sample_rate']:.2%}")
                 for name, group in noise["by_group"].items():
                     detail = (f"  decodable {group['answer_decodable_pct']:.1f}%  "
                               f"semantic {group['semantic_success_pct']:.1f}%" if group["n"] else "")

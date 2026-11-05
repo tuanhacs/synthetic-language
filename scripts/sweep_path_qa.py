@@ -74,11 +74,14 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--train-noise-codewords", type=int, nargs=2, default=[1, 3], metavar=("MIN", "MAX"))
     ap.add_argument("--train-noise-bits", type=int, nargs=2, default=[1, 2], metavar=("MIN", "MAX"))
     ap.add_argument("--train-noise-seed", type=int, default=0)
+    ap.add_argument("--train-noise-mode", choices=("random", "recoverable"), default="random",
+                    help="recoverable fixes scope=query and one bit in one occurrence")
     ap.add_argument("--test-noise", action="store_true", help="add noisy-query test after the ordinary clean test")
     ap.add_argument("--test-noise-rate", type=float, default=None, help="also enables noisy-query test; default 1.0")
     ap.add_argument("--test-noise-codewords", type=int, nargs=2, default=[1, 3], metavar=("MIN", "MAX"))
     ap.add_argument("--test-noise-bits", type=int, nargs=2, default=[1, 2], metavar=("MIN", "MAX"))
     ap.add_argument("--test-noise-seed", type=int, default=0)
+    ap.add_argument("--test-noise-mode", choices=("random", "recoverable"), default="random")
     ap.add_argument("--grid-size", type=int, default=6)
     ap.add_argument("--query-min", type=int, default=2)
     ap.add_argument("--query-max", type=int, default=4)
@@ -150,15 +153,20 @@ def main(argv: list[str] | None = None) -> int:
     if not 0 <= args.early_stopping_min_delta < float("inf"):
         ap.error("early stopping min-delta must be finite and non-negative")
     train_noise = None
-    if args.train_noise or args.train_noise_rate is not None:
+    if args.train_noise or args.train_noise_rate is not None or args.train_noise_mode != "random":
         train_noise = {"sample_rate": args.train_noise_rate if args.train_noise_rate is not None else 0.05,
                        "scope": args.train_noise_scope, "codeword_occurrences": args.train_noise_codewords,
                        "bit_flips_per_occurrence": args.train_noise_bits, "seed": args.train_noise_seed}
+        if args.train_noise_mode == "recoverable":
+            train_noise.update(mode="recoverable", scope="query", codeword_occurrences=[1, 1],
+                               bit_flips_per_occurrence=[1, 1])
     test_noise = None
-    if args.test_noise or args.test_noise_rate is not None:
+    if args.test_noise or args.test_noise_rate is not None or args.test_noise_mode != "random":
         test_noise = {"sample_rate": args.test_noise_rate if args.test_noise_rate is not None else 1.0,
                       "codeword_occurrences": args.test_noise_codewords,
                       "bit_flips_per_occurrence": args.test_noise_bits, "seed": args.test_noise_seed}
+        if args.test_noise_mode == "recoverable":
+            test_noise.update(mode="recoverable", codeword_occurrences=[1, 1], bit_flips_per_occurrence=[1, 1])
     sizes = list(range(args.train_min, args.train_max + 1, args.train_step))
     # Always establish prefix as the assignment-slot reference, even for a
     # suffix/UD-only worker. Independent workers can share a pre-created pool.
@@ -400,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                             "--test-noise-codewords", *map(str, test_noise["codeword_occurrences"]),
                             "--test-noise-bits", *map(str, test_noise["bit_flips_per_occurrence"]),
                             "--test-noise-seed", str(test_noise["seed"]),
+                            "--test-noise-mode", test_noise.get("mode", "random"),
                             *(["--eval-label", label] if label else [])],
                             out / "logs" / f"{name}_{view}.log", args.dry_run)
                         if not args.dry_run:

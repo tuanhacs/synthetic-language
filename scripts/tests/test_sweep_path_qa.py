@@ -15,6 +15,20 @@ SPEC.loader.exec_module(sweep)
 
 
 class SweepTests(unittest.TestCase):
+    def test_recoverable_flags_enable_noise_with_fixed_budget(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "dry-run"
+            log = io.StringIO()
+            with contextlib.redirect_stdout(log):
+                sweep.main(["--dry-run", "--output-root", str(output), "--code-types", "prefix",
+                    "--train-min", "20", "--train-max", "20",
+                    "--train-noise-mode", "recoverable", "--test-noise-mode", "recoverable"])
+            text = log.getvalue()
+            self.assertIn("--test-noise-mode recoverable", text)
+            self.assertIn("--test-noise-bits 1 1", text)
+            self.assertIn("--test-noise-codewords 1 1", text)
+            self.assertFalse(output.exists())
+
     def test_default_dry_run_has_sixteen_runs_and_does_not_write(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "not-created"

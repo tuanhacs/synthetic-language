@@ -30,6 +30,28 @@ from synthdata.tokenizer import BitTokenizer
 
 
 class QueryNoiseTests(unittest.TestCase):
+    def test_recoverable_noise_keeps_clean_intent_in_both_answer_formats(self):
+        self.language = Language(make_grid(2), Codebooks((("00000",), ("11100",),
+                                 ("10011",), ("01111",))), (2, 10))
+        noise = TestNoiseConfig(mode="recoverable", sample_rate=.5)
+        self.assertEqual(noise.codeword_occurrences, (1, 1))
+        for cot in ("none", "segments"):
+            samples = self.samples(cot=cot)
+            def responses(*args, **kwargs):
+                return [prefix + s.clean_bits[len(s.query_bits) + 1:]
+                        for prefix, s in zip(kwargs["prefix_bits"], samples)]
+            with patch.object(evals, "generate", side_effect=responses) as generate:
+                report = evals.eval_path_qa(self.model, self.language, self.tok, samples,
+                    n_samples=10, test_noise=noise,
+                    task_config={"query_len": [2, 4], "cot_mode": cot})
+            self.assertEqual(report["semantic_success_pct"], 100.)
+            self.assertEqual(report["test_noise"]["corrupted_samples"], 5)
+            self.assertEqual(report["test_noise"]["requested_samples"], 5)
+            self.assertEqual(report["test_noise"]["skipped_no_safe_flip"], 0)
+            prompts = generate.call_args.kwargs["prefix_bits"]
+            self.assertEqual(sum(prefix != sample.query_bits + "_"
+                                 for prefix, sample in zip(prompts, samples)), 5)
+
     def setUp(self):
         self.language = Language(make_grid(2), Codebooks((("0",), ("10",), ("110",), ("111",))), (2, 10))
         self.tok = BitTokenizer(True)
