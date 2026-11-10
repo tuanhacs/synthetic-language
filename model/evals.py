@@ -31,6 +31,7 @@ from synthdata.qa_noise import apply_query_noise
 from data import IGNORE_INDEX, PackedData
 from model import Model
 from sample import generate
+from qa_errors import QAErrorStats, format_qa_errors
 
 LN2 = math.log(2.0)
 
@@ -273,6 +274,7 @@ def eval_path_qa(
     examples: list[dict] = []
     answer_vertices = 0
     decoded_answers = 0
+    error_stats = QAErrorStats(language)
     cross_enabled = bool(
         task_config and task_config.get("split_mode") == "cross-region"
     )
@@ -289,6 +291,7 @@ def eval_path_qa(
         answers.append(answer)
         terminated = len(full) < limit - 1  # BOS is not present in returned text
         result = validate_qa_answer(language, answer, sample.query_vertices, allow_repeats=allow_repeats)
+        error_stats.observe(answer, result)
         cot_result = validate_segment_cot(
             language,
             parsed["cot_segments"],
@@ -406,6 +409,7 @@ def eval_path_qa(
             answer_vertices / decoded_answers if decoded_answers else None
         ),
         "examples": examples,
+        "error_analysis": error_stats.report(),
     }
     if cot_enabled:
         report["cot"] = {
@@ -565,6 +569,8 @@ def format_report(report: dict) -> str:
                     f"final-consistent {cot['final_consistent_pct']:.1f}%  "
                     f"CoT+semantic {cot['cot_and_semantic_success_pct']:.1f}%"
                 )
+            if "error_analysis" in res:
+                lines.extend(format_qa_errors(res["error_analysis"]))
             if "test_noise" in res:
                 noise = res["test_noise"]
                 lines.append(f"         query noise: {noise['corrupted_samples']}/{noise['test_samples']} "

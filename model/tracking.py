@@ -16,7 +16,7 @@ def flatten_metrics(document: dict, prefix: str) -> dict:
         key = f"{prefix}/{name}"
         if isinstance(value, dict):
             result.update(flatten_metrics(value, key))
-        elif isinstance(value, (str, bool, int)) or isinstance(value, float) and math.isfinite(value):
+        elif value is None or isinstance(value, (str, bool, int)) or isinstance(value, float) and math.isfinite(value):
             result[key] = value
     return result
 

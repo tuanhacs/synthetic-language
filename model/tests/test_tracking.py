@@ -114,6 +114,32 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(self.created[1].summary["test/success_pct"], 85.)
         self.assertEqual(self.created[1].records[0]["trainer/step"], 100)
 
+    def test_qa_error_analysis_uploads_all_row_pairs_and_conditional_denominators(self):
+        from qa_errors import QAErrorStats
+        from synthdata.codebooks import Codebooks
+        from synthdata.graphs import make_grid
+        from synthdata.language import Language
+        from synthdata.qa import validate_qa_answer
+        language = Language(make_grid(6), Codebooks(tuple((f"{v:06b}",) for v in range(36))))
+        errors = QAErrorStats(language)
+        bits = f"{0:06b}{14:06b}"
+        errors.observe(bits, validate_qa_answer(language, bits, (0, 14), allow_repeats=True))
+        report = {"generation": {"path_qa": {"answer_decodable_pct": 100.,
+                   "semantic_success_pct": 0., "error_analysis": errors.report()}}}
+        with patch.dict(sys.modules, {"wandb": self.sdk}):
+            log_evaluation(self.cfg, self.root / "best.pt", report, 100)
+            report["generation"]["path_qa"]["test_noise"] = {"corrupted_samples": 1}
+            log_evaluation(self.cfg, self.root / "best.pt", report, 100)
+        for run, namespace in zip(self.created, ("test", "test/noisy")):
+            base = f"{namespace}/error_analysis"
+            self.assertEqual(run.summary[f"{base}/valid_walk/conditional_denominator_n"], 0)
+            self.assertIsNone(run.summary[f"{base}/valid_walk/wrong_start_pct"])
+            self.assertEqual(run.summary[f"{base}/invalid_walk/matrix_denominator_n"], 1)
+            self.assertEqual(run.summary[f"{base}/invalid_walk/first_invalid_edge_by_rows/1->3/pct"], 100.)
+            self.assertEqual(run.records[0][f"{base}/invalid_walk/first_invalid_edge_by_rows/1->3/count"], 1)
+            self.assertEqual(sum(key.endswith("/count") and "first_invalid_edge_by_rows" in key
+                                 for key in run.summary), 36)
+
     def test_config_roundtrip_and_invalid_settings(self):
         raw = self.cfg.to_dict()
         raw.pop("path")

@@ -477,3 +477,35 @@ claim). Accepted total-bit and occurrence histograms are printed and saved.
 Training exposes the analogous `--train-noise-*` flags. Larger budgets can be
 slower to certify and may have a much lower achieved corruption rate. These
 changes do not add dynamic per-epoch noise or multiple stored variants per sample.
+
+## Conditional QA errors and first invalid edges
+
+Path-QA evaluation automatically adds `generation.path_qa.error_analysis` to
+`eval_report.json`, including no-CoT, CoT final answers, clean and noisy tests.
+Existing top-level percentages and their all-evaluated-samples denominators do
+not change.
+
+- `undecodable`: count and percentage of all evaluated answers.
+- `valid_walk`: count/percentage of all answers; wrong-start, wrong-end,
+  correct-endpoints-but-middle-waypoints-failed and semantic success counts and
+  percentages **among valid walks**. Wrong-start and wrong-end may overlap.
+  Middle failure requires both endpoints correct and the query not to be an
+  ordered subsequence with sufficient occurrences; it does not separately label
+  missing waypoints vs ordering failures. With repeats disabled, simplicity can
+  still independently cause semantic failure.
+- `invalid_walk`: codeword-decodable but graph-invalid answers. A graph-free DP
+  reconstructs the codeword sequence; when segmentation and vertex ownership are
+  unique, scan left-to-right and count only the first non-edge. The row-pair keys
+  `1->1` through `6->6` on a 6x6 grid include same-row errors. Each cell has
+  `count` and `pct`, normalized by the explicitly recorded
+  `matrix_denominator_n` (localized samples). Other grid sizes use n-by-n cells.
+  Ambiguous segmentation/shared ownership is not arbitrarily resolved: samples
+  are counted under `unlocalized_n` and `unlocalized_reasons` instead.
+
+Zero-denominator percentages are JSON `null` and log `n/a`. Console output shows
+conditional denominators and every row-pair count/percentage. When W&B is enabled,
+the existing recursive logger uploads these nested scalar fields to history and
+summary under `test/error_analysis/...`, or `test/noisy/error_analysis/...` for
+noisy-query evaluation (named natural/reversed test prefixes are preserved).
+For example, the histogram cell is
+`test/error_analysis/invalid_walk/first_invalid_edge_by_rows/1->3/pct`.

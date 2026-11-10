@@ -21,4 +21,4 @@ tracking = ["wandb>=0.17"]
 # evals.py, train.py); scripts/ add this directory to sys.path directly, so no
 # package install is required to use the CLIs.
 [tool.setuptools]
-py-modules = ["_paths", "config", "model", "data", "sample", "evals", "train", "cross_region", "tracking"]
+py-modules = ["_paths", "config", "model", "data", "sample", "evals", "train", "cross_region", "tracking", "qa_errors"]

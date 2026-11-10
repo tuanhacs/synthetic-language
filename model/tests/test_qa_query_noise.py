@@ -189,10 +189,15 @@ class QueryNoiseTests(unittest.TestCase):
             command = [sys.executable, "-B", str(script), str(checkpoint), "--dataset", str(root / "dataset"),
                        "--device", "cpu", "--n-samples", "2", "--max-len", "32"]
             env = {**os.environ, "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
-            subprocess.run(command + ["--test-noise"], check=True, capture_output=True, text=True, env=env)
+            evaluated = subprocess.run(command + ["--test-noise"], check=True, capture_output=True, text=True, env=env)
             self.assertEqual(clean_report.read_text(), "clean result must not be overwritten")
             noisy = json.loads((root / "eval_noisy/eval_report.json").read_text())
             self.assertEqual(noisy["generation"]["path_qa"]["test_noise"]["corrupted_samples"], 2)
+            errors = noisy["generation"]["path_qa"]["error_analysis"]
+            self.assertEqual(errors["total_n"], 2)
+            self.assertEqual(sum(errors[key]["n"] for key in ("valid_walk", "invalid_walk", "undecodable")), 2)
+            self.assertIn("QA errors", evaluated.stdout)
+            self.assertIn("first-invalid-edge", evaluated.stdout)
             subprocess.run(command + ["--no-test-noise"], check=True, capture_output=True, text=True, env=env)
             clean = json.loads(clean_report.read_text())
             self.assertNotIn("test_noise", clean["generation"]["path_qa"])
