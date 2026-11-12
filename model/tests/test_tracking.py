@@ -179,6 +179,18 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(self.created[1].summary["test/reversed/noisy/success_pct"], 85.)
         self.assertNotIn("test/success_pct", self.created[0].summary)
 
+    def test_edge_images_uploaded_with_named_test_namespace(self):
+        self.sdk.Image = Mock(side_effect=lambda path, **kw: (path, kw))
+        report = {"generation": {"path_qa": {"answer_decodable_pct": 99., "semantic_success_pct": 85.}},
+                  "edge_heatmaps": {"plots": {"training": "training.png", "generated": "generated.png"},
+                                    "training": {"total_occurrences": 123}}}
+        with patch.dict(sys.modules, {"wandb": self.sdk}):
+            log_evaluation(self.cfg, self.root / "best.pt", report, 100, label="natural")
+        self.assertEqual(self.sdk.Image.call_count, 2)
+        values = self.created[0].records[-1]
+        self.assertIn("test/natural/edge_heatmaps/generated", values)
+        self.assertEqual(values["test/natural/training_edge_usage/total_occurrences"], 123)
+
 
 if __name__ == "__main__":
     unittest.main()

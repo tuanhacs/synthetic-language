@@ -181,6 +181,7 @@ class QueryNoiseTests(unittest.TestCase):
                 query_len=(2, 2), segment_len=(2, 4)))
             save_dataset(root / "dataset", cfg, self.language, Splits(samples, samples, samples))
             run_cfg = Config(model=ModelConfig(vocab_size=6, d_model=8, n_heads=2, n_layers=1, context_len=64))
+            run_cfg = replace(run_cfg, data=replace(run_cfg.data, dataset_dir=str(root / "dataset")))
             checkpoint = root / "best.pt"
             save_checkpoint(checkpoint, build_model(run_cfg.model), run_cfg, 1, .1)
             clean_report = root / "eval_report.json"
@@ -198,6 +199,11 @@ class QueryNoiseTests(unittest.TestCase):
             self.assertEqual(sum(errors[key]["n"] for key in ("valid_walk", "invalid_walk", "undecodable")), 2)
             self.assertIn("QA errors", evaluated.stdout)
             self.assertIn("first-invalid-edge", evaluated.stdout)
+            for plot in noisy["edge_heatmaps"]["plots"].values():
+                self.assertTrue(Path(plot).is_file())
+            self.assertTrue(noisy["edge_heatmaps"]["training"]["available"])
+            self.assertEqual(noisy["edge_heatmaps"]["training"]["source"], "streamed train JSONL")
+            self.assertEqual(noisy["generation"]["path_qa"]["edge_usage"]["n_samples"], 2)
             subprocess.run(command + ["--no-test-noise"], check=True, capture_output=True, text=True, env=env)
             clean = json.loads(clean_report.read_text())
             self.assertNotIn("test_noise", clean["generation"]["path_qa"])

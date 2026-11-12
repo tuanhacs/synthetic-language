@@ -13,6 +13,9 @@ class QAErrorStats:
         self.valid_counts = Counter()
         self.edges = Counter()
         self.unlocalized = Counter()
+        self.generated_edges = Counter()
+        self.invalid_transitions = Counter()
+        self.included_samples = 0
         owners = {}
         for vertex, book in enumerate(language.codebooks.books):
             for word in book:
@@ -55,6 +58,7 @@ class QAErrorStats:
             return
         if result["valid_walk"]:
             self.valid += 1
+            self._count_edges(result["walk"])
             both = result["correct_start"] and result["correct_end"]
             self.valid_counts["wrong_start"] += not result["correct_start"]
             self.valid_counts["wrong_end"] += not result["correct_end"]
@@ -67,11 +71,31 @@ class QAErrorStats:
         if reason:
             self.unlocalized[reason] += 1
             return
+        self._count_edges(walk)
         for a, b in zip(walk, walk[1:]):
             if not self.language.graph.is_edge(a, b):
                 self.edges[(a // self.language.graph.n + 1, b // self.language.graph.n + 1)] += 1
                 return  # Exactly one contribution: the leftmost invalid edge.
         self.unlocalized["no_non_edge_found"] += 1
+
+    def _count_edges(self, walk):
+        self.included_samples += 1
+        for a, b in zip(walk, walk[1:]):
+            counter = self.generated_edges if self.language.graph.is_edge(a, b) else self.invalid_transitions
+            counter[a, b] += 1
+
+    def edge_usage_report(self):
+        from edge_heatmaps import edge_usage
+        return {
+            **edge_usage(self.language.graph, self.generated_edges),
+            "n_samples": self.total,
+            "included_samples": self.included_samples,
+            "excluded_undecodable": self.undecodable,
+            "excluded_ambiguous": self.total - self.undecodable - self.included_samples,
+            "exclusion_reasons": dict(self.unlocalized),
+            "invalid_occurrences": sum(self.invalid_transitions.values()),
+            "invalid_transitions": {f"{a},{b}": count for (a, b), count in sorted(self.invalid_transitions.items())},
+        }
 
     def report(self):
         localized = sum(self.edges.values())

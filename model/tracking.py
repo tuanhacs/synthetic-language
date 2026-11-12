@@ -115,6 +115,13 @@ def log_evaluation(cfg: Config, checkpoint: Path, report: dict, step: int, label
             values[f"{prefix}/decodable_pct"] = generation["path_qa"]["answer_decodable_pct"]
             values[f"{prefix}/success_pct"] = generation["path_qa"]["semantic_success_pct"]
         if tracker.run is not None:
+            if "edge_heatmaps" in report:
+                import wandb
+                heatmaps = report["edge_heatmaps"]
+                for name, path in heatmaps["plots"].items():
+                    values[f"{prefix}/edge_heatmaps/{name}"] = wandb.Image(
+                        path, caption=f"{name.title()} directed-edge frequency (shared scale)")
+                values.update(flatten_metrics(heatmaps["training"], f"{prefix}/training_edge_usage"))
             tracker.run.log({"trainer/step": step, **values})
             tracker.run.summary.update(values)
         tracker.finish()

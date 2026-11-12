@@ -121,6 +121,7 @@ def main() -> int:
         eval_cfg,
         device=device,
         out_dir=out_dir,
+        training_dataset_dir=cfg.resolved_dataset_dir(),
         extra={"checkpoint": str(Path(args.checkpoint).resolve()), "step": ckpt.get("step")},
     )
     print(f"device       {device}")

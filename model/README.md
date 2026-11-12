@@ -509,3 +509,27 @@ summary under `test/error_analysis/...`, or `test/noisy/error_analysis/...` for
 noisy-query evaluation (named natural/reversed test prefixes are preserved).
 For example, the histogram cell is
 `test/error_analysis/invalid_walk/first_invalid_edge_by_rows/1->3/pct`.
+## Evaluation edge heatmaps
+
+Path-QA evaluation automatically saves `edge_heatmaps/training_edges.png` and
+`edge_heatmaps/generated_edges.png` beside `eval_report.json`. Install the updated
+dependencies with `python -m pip install -e ./model` from the repository root.
+With W&B enabled, both images appear under `test/edge_heatmaps` (or the named/noisy
+test namespace). No additional CLI flags or retraining are needed; rerun evaluation
+to produce plots for older checkpoints.
+
+Arrows distinguish both directions of each grid edge. Both plots use the same
+yellow-to-red color scale; gray means unused. Each frequency is the edge's number
+of traversals divided by **all valid edge occurrences in its own collection**,
+including repetitions. The training plot uses semantic final-answer paths from the
+checkpoint's original training dataset, not evaluation references or duplicated CoT
+segments. Cached manifest counts are reused; older datasets are streamed once.
+If that training dataset is unavailable, the plot is explicitly marked unavailable.
+
+The generated plot includes **all evaluated final answers**, not just saved examples
+or successful answers. Unambiguously decoded invalid walks still contribute their
+valid edges; invalid jumps are counted separately and excluded from normalization.
+Undecodable answers and invalid answers with ambiguous vertex ownership are excluded.
+Counts, exclusions, invalid transitions, training source, and the common color scale
+are saved in `eval_report.json` (`generation.path_qa.edge_usage` and `edge_heatmaps`).
+No difference map is produced.

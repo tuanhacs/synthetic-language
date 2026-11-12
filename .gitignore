@@ -32,3 +32,6 @@ app_path_qa_prefix_suffix.py
 app_path_qa_ud.py
 app_path_qa.py
 app_path_qa_evaluate.py
+
+# Local aggregated experiment report
+/prefix_suffix_5seeds_results.md

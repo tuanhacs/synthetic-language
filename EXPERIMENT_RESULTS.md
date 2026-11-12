@@ -232,3 +232,6 @@ Success is reported as **mean ± sample standard deviation** across training see
 - `Success` is `semantic_success_pct`: the decoded answer starts and ends correctly, visits all requested waypoints in order, and every pairwise path segment is simple.
 - Repeated rows with the same displayed configuration are retained when results were supplied from different trained model artifacts.
 - `—` means that the value was not available in the recorded output and should not be inferred.
+
+
+15 -> 1234345

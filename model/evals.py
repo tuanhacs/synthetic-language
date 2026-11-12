@@ -410,6 +410,7 @@ def eval_path_qa(
         ),
         "examples": examples,
         "error_analysis": error_stats.report(),
+        "edge_usage": error_stats.edge_usage_report(),
     }
     if cot_enabled:
         report["cot"] = {
@@ -461,6 +462,7 @@ def run_all(
     out_dir: str | Path | None = None,
     keep_samples: int = 10,
     extra: dict | None = None,
+    training_dataset_dir: str | Path | None = None,
 ) -> dict:
     """Run every v1 evaluation and (optionally) write ``eval_report.json``."""
     rng = torch.Generator(device="cpu").manual_seed(eval_cfg.seed)
@@ -500,6 +502,13 @@ def run_all(
         if out_dir is not None:
             path = Path(out_dir)
             path.mkdir(parents=True, exist_ok=True)
+            from edge_heatmaps import training_edge_usage, save_edge_heatmaps
+            generated = report["generation"]["path_qa"]["edge_usage"]
+            training = training_edge_usage(training_dataset_dir or data.dataset_dir, data.language.graph)
+            report["edge_heatmaps"] = {
+                "training": training,
+                **save_edge_heatmaps(data.language.graph, training, generated, path / "edge_heatmaps"),
+            }
             (path / "eval_report.json").write_text(
                 json.dumps(report, indent=2) + "\n", encoding="utf-8"
             )
@@ -571,6 +580,16 @@ def format_report(report: dict) -> str:
                 )
             if "error_analysis" in res:
                 lines.extend(format_qa_errors(res["error_analysis"]))
+            if "edge_usage" in res:
+                usage = res["edge_usage"]
+                lines.append(f"         edge usage: included={usage['included_samples']}/{usage['n_samples']} "
+                             f"valid occurrences={usage['total_occurrences']} invalid={usage['invalid_occurrences']} "
+                             f"excluded undecodable={usage['excluded_undecodable']} ambiguous={usage['excluded_ambiguous']}")
+            if "edge_heatmaps" in report:
+                heatmaps = report["edge_heatmaps"]
+                lines.append(f"         edge heatmaps: {heatmaps['plots']}")
+                if not heatmaps["training"]["available"]:
+                    lines.append(f"         training heatmap unavailable: {heatmaps['training']['reason']}")
             if "test_noise" in res:
                 noise = res["test_noise"]
                 lines.append(f"         query noise: {noise['corrupted_samples']}/{noise['test_samples']} "

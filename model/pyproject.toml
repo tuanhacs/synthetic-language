@@ -7,7 +7,7 @@ name = "synthmodel"
 version = "0.1.0"
 description = "Llama-style decoder-only transformers trained on the synthetic graph-walk language"
 requires-python = ">=3.10"
-dependencies = ["torch>=2.1", "pyyaml>=6.0"]
+dependencies = ["torch>=2.1", "pyyaml>=6.0", "matplotlib>=3.8"]
 
 [project.optional-dependencies]
 tracking = ["wandb>=0.17"]
@@ -21,4 +21,4 @@ tracking = ["wandb>=0.17"]
 # evals.py, train.py); scripts/ add this directory to sys.path directly, so no
 # package install is required to use the CLIs.
 [tool.setuptools]
-py-modules = ["_paths", "config", "model", "data", "sample", "evals", "train", "cross_region", "tracking", "qa_errors"]
+py-modules = ["_paths", "config", "model", "data", "sample", "evals", "train", "cross_region", "tracking", "qa_errors", "edge_heatmaps"]
