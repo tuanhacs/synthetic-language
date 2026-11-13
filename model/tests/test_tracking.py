@@ -73,6 +73,19 @@ class TrackingTests(unittest.TestCase):
             tracker.finish()
         self.assertFalse(self.root.exists())
 
+    def test_scheduler_metrics_are_logged_to_wandb(self):
+        with patch.dict(sys.modules, {"wandb": self.sdk}):
+            tracker = RunTracker(self.cfg)
+            tracker.log_training({"step": 500, "lr": .0003, "train_bits_per_token": .2,
+                "elapsed_s": 2., "early_stopping_bad_checks": 0, "valid_bits_per_token": .3,
+                "lr_scheduler": {"type": "plateau", "next_lr": .00015,
+                                 "reduced": True, "reductions": 1, "bad_checks": 0}})
+            tracker.finish()
+        values = self.created[0].records[0]
+        self.assertEqual(values["lr_scheduler/next_lr"], .00015)
+        self.assertTrue(values["lr_scheduler/reduced"])
+        self.assertEqual(values["lr_scheduler/reductions"], 1)
+
     def test_online_reuses_persisted_id_and_logs_custom_step(self):
         with patch.dict(sys.modules, {"wandb": self.sdk}):
             first = RunTracker(self.cfg)

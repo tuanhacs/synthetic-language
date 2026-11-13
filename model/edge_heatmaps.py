@@ -1,7 +1,21 @@
 """Directed graph-edge usage: semantic training paths and generated final answers."""
 import json
+import math
 from collections import Counter
 from pathlib import Path
+
+
+LEVEL_COLORS = ('#2563eb', '#16a34a', '#ca8a04', '#ea580c', '#dc2626')
+LEVEL_NAMES = ('Very low', 'Low', 'Medium', 'High', 'Very high')
+
+
+def level_colormap():
+    """Distinct hues per frequency band; opacity increases within each band."""
+    from matplotlib.colors import ListedColormap, to_rgb
+    return ListedColormap([
+        (*to_rgb(color), .4 + .6 * step / 127)
+        for color in LEVEL_COLORS for step in range(128)
+    ], name='frequency_levels_alpha')
 
 
 def edge_usage(graph, counts):
@@ -47,22 +61,26 @@ def training_edge_usage(dataset_dir, graph):
             "dataset_dir": str(directory), "paths": "semantic final answer_walk (not duplicated CoT segments)"}
 
 
-def save_edge_heatmaps(graph, training, generated, out_dir):
+def save_edge_heatmaps(graph, training, generated, out_dir, *, vmax=None):
     """Two local PNGs sharing one frequency normalization; no difference map."""
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
     from matplotlib.colors import Normalize
-    from matplotlib import colormaps
     from matplotlib.patches import FancyArrowPatch
     from matplotlib.cm import ScalarMappable
     from matplotlib.ticker import PercentFormatter
 
     directory = Path(out_dir).resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    vmax = max((value for usage in (training, generated)
+    observed_max = max((value for usage in (training, generated)
                 for value in usage.get("frequencies", {}).values()), default=0.)
-    norm = Normalize(0., vmax or 1.)
-    cmap = colormaps["YlOrRd"]
+    if vmax is None:
+        vmax = observed_max or 1.
+    if not math.isfinite(vmax) or vmax <= 0 or vmax < observed_max:
+        raise ValueError('vmax must be finite, positive, and at least the largest frequency')
+    norm = Normalize(0., vmax)
+    cmap = level_colormap()
+    boundaries = [vmax * index / 5 for index in range(6)]
     paths = {}
     for name, usage in (("training", training), ("generated", generated)):
         fig = Figure(figsize=(8, 7), layout="constrained")
@@ -89,10 +107,16 @@ def save_edge_heatmaps(graph, training, generated, out_dir):
                   if usage.get("available", True) else "Training source unavailable")
         ax.set_title(f"{name.title()} edge usage\n{detail}")
         fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax,
-                     format=PercentFormatter(1.), label="Share of valid directed-edge occurrences")
-        fig.text(.03, .01, "Gray = unused; arrows = direction; vertex labels = 0-based", fontsize=9)
+                     ticks=boundaries, format=PercentFormatter(1.),
+                     label="Share of valid directed-edge occurrences (five levels)")
+        fig.text(.03, .035, "Blue → green → yellow → orange → red: increasing frequency", fontsize=8)
+        fig.text(.03, .012, "Within each band: faint → opaque. Gray = unused; vertices = 0-based", fontsize=8)
         target = directory / f"{name}_edges.png"
         fig.savefig(target, dpi=160)
         paths[name] = str(target)
-    return {"plots": paths, "vmin": 0., "vmax": norm.vmax, "colormap": "YlOrRd",
+    return {"plots": paths, "vmin": 0., "vmax": norm.vmax, "colormap": cmap.name,
+            "levels": [{"name": name, "color": color, "lower_frequency": boundaries[i],
+                        "upper_frequency": boundaries[i+1]}
+                       for i, (name, color) in enumerate(zip(LEVEL_NAMES, LEVEL_COLORS))],
+            "opacity_range_within_each_level": [.4, 1.],
             "zero_color": "#cccccc", "scale": "shared normalized directed-edge frequency"}

@@ -65,7 +65,10 @@ class SweepTests(unittest.TestCase):
                          "--train-min", "12", "--train-max", "20", "--train-step", "4",
                          "--valid-query-pairs", "10", "--test-query-pairs", "10",
                          "--qa-mode", "iid", "--assignment", "disjoint", "--cot-mode", "none",
-                         "--max-steps", "10", "--lr-decay-steps", "20", "--early-stopping-patience", "2", "--eval-samples", "1",
+                         "--max-steps", "10", "--lr-scheduler", "plateau",
+                         "--lr-plateau-factor", "0.4", "--lr-plateau-patience", "6",
+                         "--lr-plateau-threshold", "0.0002",
+                         "--early-stopping-patience", "2", "--eval-samples", "1",
                          "--code-types", "prefix", "suffix", "ud",
                          "--wandb-mode", "offline", "--wandb-project", "qa-tests",
                          "--train-seed", "7"]
@@ -79,7 +82,11 @@ class SweepTests(unittest.TestCase):
                     self.assertEqual(cfg["train"]["max_steps"], 10)
                     self.assertEqual(cfg["train"]["seed"], 7)
                     self.assertEqual(cfg["eval"]["seed"], 0)
-                    self.assertEqual(cfg["train"]["lr_decay_steps"], 20)
+                    self.assertEqual(cfg["train"]["lr_scheduler"], "plateau")
+                    self.assertEqual(cfg["train"]["lr_plateau_factor"], .4)
+                    self.assertEqual(cfg["train"]["lr_plateau_patience"], 6)
+                    self.assertEqual(cfg["train"]["lr_plateau_threshold"], .0002)
+                    self.assertNotIn("lr_decay_steps", cfg["train"])
                     self.assertEqual(cfg["train"]["early_stopping_patience"], 2)
                     self.assertEqual(cfg["wandb"]["mode"], "offline")
                     self.assertEqual(cfg["wandb"]["project"], "qa-tests")

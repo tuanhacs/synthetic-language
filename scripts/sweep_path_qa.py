@@ -106,6 +106,12 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-steps", type=int, default=20_000)
     ap.add_argument("--lr-decay-steps", type=int, default=None,
                     help="reach minimum LR at this absolute step, then hold (default: max-steps)")
+    ap.add_argument("--lr-scheduler", choices=("cosine", "plateau"), default="cosine")
+    ap.add_argument("--lr-plateau-factor", type=float, default=0.5)
+    ap.add_argument("--lr-plateau-patience", type=int, default=4,
+                    help="tolerated bad validation checks before an LR reduction")
+    ap.add_argument("--lr-plateau-threshold", type=float, default=0.0001,
+                    help="minimum absolute validation improvement in bits/token")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--eval-every", type=int, default=250)
@@ -154,6 +160,12 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("validation intervals/batches must be positive and patience non-negative")
     if args.lr_decay_steps is not None and args.lr_decay_steps <= min(100, args.max_steps):
         ap.error("lr-decay-steps must be greater than warmup (min(100, max-steps))")
+    if args.lr_scheduler == "plateau" and args.lr_decay_steps is not None:
+        ap.error("omit --lr-decay-steps when using --lr-scheduler plateau")
+    if not 0 < args.lr_plateau_factor < 1 or args.lr_plateau_patience < 0:
+        ap.error("plateau factor must be between 0 and 1; plateau patience must be non-negative")
+    if not 0 <= args.lr_plateau_threshold < float("inf"):
+        ap.error("plateau threshold must be finite and non-negative")
     if not 0 <= args.early_stopping_min_delta < float("inf"):
         ap.error("early stopping min-delta must be finite and non-negative")
     train_noise = None
@@ -203,7 +215,9 @@ def main(argv: list[str] | None = None) -> int:
         settings["train_noise"] = train_noise
     # Preserve settings identity for existing step-only sweeps with all new
     # options disabled/defaulted.
-    for key, default in (("allow_repeats", False), ("paired_reversal", False), ("train_seed", None), ("lr_decay_steps", None), ("eval_batches", 20),
+    for key, default in (("lr_scheduler", "cosine"), ("lr_plateau_factor", 0.5),
+                         ("lr_plateau_patience", 4), ("lr_plateau_threshold", 0.0001),
+                         ("allow_repeats", False), ("paired_reversal", False), ("train_seed", None), ("lr_decay_steps", None), ("eval_batches", 20),
                          ("early_stopping_patience", 0), ("early_stopping_min_delta", 0.0)):
         if settings[key] == default:
             settings.pop(key)
@@ -359,7 +373,9 @@ def main(argv: list[str] | None = None) -> int:
                         *args.wandb_tags, kind, args.qa_mode, args.assignment, args.cot_mode,
                     ])),
                 }
-            for key, default in (("lr_decay_steps", None), ("eval_batches", 20),
+            for key, default in (("lr_scheduler", "cosine"), ("lr_plateau_factor", 0.5),
+                                 ("lr_plateau_patience", 4), ("lr_plateau_threshold", 0.0001),
+                                 ("lr_decay_steps", None), ("eval_batches", 20),
                                  ("early_stopping_patience", 0), ("early_stopping_min_delta", 0.0)):
                 if getattr(args, key) != default:
                     model_config["train"][key] = getattr(args, key)

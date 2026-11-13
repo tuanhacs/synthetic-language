@@ -15,6 +15,20 @@ from qa_errors import QAErrorStats
 
 
 class EdgeHeatmapTests(unittest.TestCase):
+    def test_five_distinct_hues_and_opacity_increases_within_each_band(self):
+        import edge_heatmaps
+        self.assertTrue(hasattr(edge_heatmaps, 'level_colormap'), 'Frequency-level palette is missing')
+        cmap = edge_heatmaps.level_colormap()
+        colors = []
+        for level in range(5):
+            faint = cmap((level + .1) / 5)
+            opaque = cmap((level + .9) / 5)
+            self.assertEqual(faint[:3], opaque[:3])
+            self.assertLess(faint[3], opaque[3])
+            colors.append(faint[:3])
+        self.assertEqual(len(set(colors)), 5)
+        self.assertEqual(cmap(1.)[3], 1.)
+
     def test_counts_all_occurrences_not_only_successes_or_first_ten(self):
         language = Language(make_grid(2), Codebooks((("00",), ("01",), ("10",), ("11",))))
         stats = QAErrorStats(language)
@@ -57,6 +71,12 @@ class EdgeHeatmapTests(unittest.TestCase):
             self.assertEqual(plots["vmax"], 1.)
             for path in plots["plots"].values():
                 self.assertEqual(Path(path).read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            shared = save_edge_heatmaps(graph, train, generated, root / "shared", vmax=2.)
+            self.assertEqual(shared['vmax'], 2.)
+            self.assertEqual(len(shared['levels']), 5)
+            self.assertEqual(shared['levels'][-1]['upper_frequency'], 2.)
+            with self.assertRaises(ValueError):
+                save_edge_heatmaps(graph, train, generated, root / "clipped", vmax=.5)
             (root / "manifest.json").write_text(json.dumps({"files": {"train": "train.jsonl"}}))
             (root / "train.jsonl").write_text(json.dumps({"answer_walk": [0, 1, 0]}) + "\n")
             self.assertEqual(training_edge_usage(root, graph)["counts"]["1,0"], 1)

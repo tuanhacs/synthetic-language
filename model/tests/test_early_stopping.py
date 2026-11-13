@@ -160,6 +160,75 @@ class EarlyStoppingTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_config({"train": {"max_epochs": 2}})
 
+    def test_plateau_reduces_lr_before_allowing_early_stopping(self):
+        cfg = self.cfg("plateau", lr_scheduler="plateau", lr_plateau_patience=0,
+                       min_lr_frac=.25, eval_every=1, checkpoint_every=1)
+        result = self.run_train(cfg, [1.] * 10)
+        self.assertEqual(result["steps"], 5)
+        self.assertTrue(result["stopped_early"])
+        rows = result["history"]
+        for row, fraction in zip(rows, (1., 1., .5, .25, .25)):
+            self.assertAlmostEqual(row["lr"], cfg.train.lr * fraction)
+        self.assertEqual([r["early_stopping_bad_checks"] for r in rows], [0, 0, 0, 1, 2])
+        self.assertEqual([r["lr_scheduler"]["reduced"] for r in rows], [False, True, True, False, False])
+        self.assertEqual(rows[-1]["lr_scheduler"]["reductions"], 2)
+        self.assertEqual(self.checkpoint("plateau")["lr_reductions"], 2)
+
+    def test_plateau_does_not_stop_above_floor_or_during_warmup(self):
+        cfg = self.cfg("warmup", max_steps=6, warmup=3, lr_scheduler="plateau",
+                       lr_plateau_patience=4, eval_every=1, early_stopping_patience=1)
+        result = self.run_train(cfg, [1.] * 6)
+        self.assertFalse(result["stopped_early"])
+        self.assertTrue(all(not r["lr_scheduler"]["reduced"] for r in result["history"]))
+        self.assertEqual(self.checkpoint("warmup")["lr_scheduler_state"]["last_epoch"], 3)
+
+    def test_plateau_resume_preserves_lr_patience_and_weights(self):
+        options = dict(lr_scheduler="plateau", lr_plateau_patience=1,
+                       min_lr_frac=.25, eval_every=1, checkpoint_every=1)
+        full = self.run_train(self.cfg("plateau_full", **options), [1.] * 10)
+        save = training.save_training_checkpoint
+
+        def interrupt(*args, **kwargs):
+            save(*args, **kwargs)
+            if args[5] == 4:  # after one reduction and one subsequent bad check
+                raise RuntimeError("plateau interruption")
+
+        cfg = self.cfg("plateau_resume", **options)
+        with patch.object(training, "save_training_checkpoint", side_effect=interrupt):
+            with self.assertRaisesRegex(RuntimeError, "plateau interruption"):
+                self.run_train(cfg, [1.] * 10)
+        resumed = self.run_train(cfg, [1.] * 10)
+        self.assertEqual(full["steps"], resumed["steps"])
+        without_time = lambda rows: [{k: v for k, v in r.items() if k != "elapsed_s"} for r in rows]
+        self.assertEqual(without_time(full["history"][4:]), without_time(resumed["history"]))
+        left, right = self.checkpoint("plateau_full"), self.checkpoint("plateau_resume")
+        for key in ("lr_scheduler_state", "lr_reductions", "early_stopping"):
+            self.assertEqual(left[key], right[key])
+        for key in left["model"]:
+            self.assertTrue(torch.equal(left["model"][key], right["model"][key]), key)
+
+    def test_plateau_requires_validation_even_without_early_stopping(self):
+        self.data.valid = torch.empty(0)
+        with self.assertRaisesRegex(ValueError, "validation"):
+            self.run_train(self.cfg("no_valid", lr_scheduler="plateau", early_stopping_patience=0), [])
+
+    def test_plateau_keeps_peak_lr_while_validation_improves(self):
+        cfg = self.cfg("improving", max_steps=5, lr_scheduler="plateau",
+                       lr_plateau_patience=0, eval_every=1)
+        result = self.run_train(cfg, [1., .8, .6, .4, .2])
+        self.assertFalse(result["stopped_early"])
+        self.assertTrue(all(r["lr"] == cfg.train.lr for r in result["history"]))
+        self.assertEqual(result["lr_reductions"], 0)
+
+    def test_plateau_resume_rejects_missing_scheduler_state(self):
+        cfg = self.cfg("missing_scheduler", max_steps=2, lr_scheduler="plateau", eval_every=1)
+        self.run_train(cfg, [1., 1.])
+        checkpoint = self.checkpoint("missing_scheduler")
+        checkpoint.pop("lr_scheduler_state")
+        torch.save(checkpoint, self.root / "missing_scheduler" / "latest.pt")
+        with self.assertRaisesRegex(ValueError, "scheduler state"):
+            self.run_train(cfg, [])
+
 
 if __name__ == "__main__":
     unittest.main()

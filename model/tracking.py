@@ -70,6 +70,7 @@ class RunTracker:
         }
         if record["valid_bits_per_token"] is not None:
             values["valid/loss_bits_per_token"] = record["valid_bits_per_token"]
+        values.update(flatten_metrics(record.get("lr_scheduler", {}), "lr_scheduler"))
         self.run.log(values)
 
     def summary(self, values: dict, prefix: str = "train") -> None:

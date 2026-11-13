@@ -36,6 +36,12 @@ def main() -> int:
     ap.add_argument("--max-steps", type=positive_int, default=None)
     ap.add_argument("--lr-decay-steps", type=positive_int, default=None,
                     help="absolute step reaching minimum LR; then hold it (default: max-steps)")
+    ap.add_argument("--lr-scheduler", choices=("cosine", "plateau"), default=None)
+    ap.add_argument("--lr-plateau-factor", type=float, default=None)
+    ap.add_argument("--lr-plateau-patience", type=int, default=None,
+                    help="tolerated bad validation checks before an LR reduction")
+    ap.add_argument("--lr-plateau-threshold", type=float, default=None,
+                    help="minimum absolute validation improvement in bits/token")
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--seed", type=int, default=None)
@@ -82,6 +88,10 @@ def main() -> int:
         for k, v in {
             "max_steps": args.max_steps,
             "lr_decay_steps": args.lr_decay_steps,
+            "lr_scheduler": args.lr_scheduler,
+            "lr_plateau_factor": args.lr_plateau_factor,
+            "lr_plateau_patience": args.lr_plateau_patience,
+            "lr_plateau_threshold": args.lr_plateau_threshold,
             "batch_size": args.batch_size,
             "lr": args.lr,
             "seed": args.seed,

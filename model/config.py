@@ -89,9 +89,13 @@ class TrainConfig:
     max_steps: int = 2000
     batch_size: int = 32
     lr: float = 3e-4
-    min_lr_frac: float = 0.1  # cosine floor, as a fraction of lr
+    min_lr_frac: float = 0.1  # LR floor, as a fraction of lr
     warmup: int = 100
     lr_decay_steps: int | None = None  # absolute step reaching LR floor; None = max_steps
+    lr_scheduler: str = "cosine"  # cosine | plateau (validation-based, after warmup)
+    lr_plateau_factor: float = 0.5
+    lr_plateau_patience: int = 4  # tolerated bad validation checks; reduce on the next
+    lr_plateau_threshold: float = 0.0001  # absolute improvement in bits/token
     weight_decay: float = 0.1
     betas: tuple[float, float] = (0.9, 0.95)
     grad_clip: float = 1.0
@@ -107,6 +111,24 @@ class TrainConfig:
     device: str | None = None  # None = auto (cuda > mps > cpu)
 
     def __post_init__(self) -> None:
+        if self.lr_scheduler not in ("cosine", "plateau"):
+            raise ConfigError("train.lr_scheduler must be cosine or plateau")
+        if not 0 < self.lr_plateau_factor < 1:
+            raise ConfigError("train.lr_plateau_factor must be between 0 and 1")
+        if (isinstance(self.lr_plateau_patience, bool) or
+                not isinstance(self.lr_plateau_patience, int) or self.lr_plateau_patience < 0):
+            raise ConfigError("train.lr_plateau_patience must be a non-negative integer")
+        if not 0 <= self.lr_plateau_threshold < float("inf"):
+            raise ConfigError("train.lr_plateau_threshold must be finite and non-negative")
+        if self.lr_scheduler == "plateau":
+            if self.lr_decay_steps is not None:
+                raise ConfigError("train.lr_decay_steps applies only to cosine; omit it for plateau")
+            if not 0 < self.min_lr_frac <= 1:
+                raise ConfigError("plateau requires 0 < train.min_lr_frac <= 1")
+            if not 0 < self.lr < float("inf"):
+                raise ConfigError("plateau requires a finite positive train.lr")
+            if isinstance(self.warmup, bool) or not isinstance(self.warmup, int) or self.warmup < 0:
+                raise ConfigError("plateau requires a non-negative integer train.warmup")
         if self.lr_decay_steps is not None:
             if (isinstance(self.lr_decay_steps, bool) or
                     not isinstance(self.lr_decay_steps, int) or self.lr_decay_steps <= 0):

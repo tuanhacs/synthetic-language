@@ -103,6 +103,46 @@ Early stopping is active throughout training, including before step 20000.
 and is saved in config/checkpoints/W&B. Changing it requires a fresh run/output
 directory; omitting it preserves the old schedule and checkpoint compatibility.
 
+### Optional validation-based LR scheduling
+
+Cosine remains the default. Select `plateau` to keep the peak LR after warmup
+while validation improves, then reduce it when validation loss stalls:
+
+```bash
+python model/scripts/train.py YOUR_MODEL_CONFIG.yaml \
+  --lr-scheduler plateau \
+  --lr-plateau-factor 0.5 --lr-plateau-patience 4 \
+  --lr-plateau-threshold 0.0001 \
+  --max-steps 50000 --eval-every 500 --eval-batches 100 \
+  --early-stopping-patience 8 --early-stopping-min-delta 0.0001 \
+  --out-dir outputs/plateau_experiment
+```
+
+The same flags work with `scripts/sweep_path_qa.sh`; use a new output root for
+the new schedule. YAML accepts the corresponding underscore-separated fields
+inside `train`. Omit `lr_decay_steps` (or set it to `null` in YAML) for plateau.
+The scheduler requires a non-empty validation split and uses the same fixed
+validation subset as checkpoint selection, never the test split.
+
+`lr_plateau_patience` follows PyTorch's `ReduceLROnPlateau` convention: 4 tolerates
+four bad checks and reduces LR on the fifth. `lr_plateau_threshold` is an
+absolute bits/token threshold. Warmup checks do not count toward LR patience.
+The floor is `lr * min_lr_frac` (default `3e-5` for a peak LR of `3e-4`).
+
+In plateau mode, early stopping is deferred during warmup and while LR is above
+its floor. The reduction reaching the floor starts a fresh early-stopping
+reference and patience window; the next validation checks count toward stopping.
+`max_steps` remains the hard cap, even if the floor has not yet been reached.
+`best.pt` always tracks the global minimum raw validation loss independently.
+Cosine mode retains its existing early-stopping behavior.
+
+`latest.pt` includes scheduler state, reduction count, optimizer state and
+early-stopping state for exact resume. Legacy cosine checkpoints remain resumable;
+switching scheduler or changing plateau/validation settings requires a fresh run.
+Training logs each LR reduction. `metrics.jsonl` and W&B record scheduler type,
+next-update LR, reduction events/count and plateau bad-check count under
+`lr_scheduler/`; `train/lr` remains the LR used by the completed optimizer step.
+
 ### Optional Weights & Biases
 
 Install the extra once (`python -m pip install -e './model[tracking]'` from the
@@ -519,7 +559,9 @@ test namespace). No additional CLI flags or retraining are needed; rerun evaluat
 to produce plots for older checkpoints.
 
 Arrows distinguish both directions of each grid edge. Both plots use the same
-yellow-to-red color scale; gray means unused. Each frequency is the edge's number
+five frequency bands (blue, green, yellow, orange, red); opacity increases from
+40% to 100% within each band. Gray means unused. The colorbar shows the band
+boundaries, which are also recorded in JSON. Each frequency is the edge's number
 of traversals divided by **all valid edge occurrences in its own collection**,
 including repetitions. The training plot uses semantic final-answer paths from the
 checkpoint's original training dataset, not evaluation references or duplicated CoT

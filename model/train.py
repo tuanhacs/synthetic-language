@@ -1,7 +1,7 @@
 """Training loop (library function; ``scripts/train.py`` is the CLI).
 
 AdamW with decoupled weight decay (no decay on norms and the tied embedding),
-linear warmup then cosine decay to ``min_lr_frac * lr``, gradient clipping at 1.0.
+linear warmup then cosine or validation-based decay, gradient clipping at 1.0.
 Loss is reported in **bits/token** (nats / ln 2) so it is directly comparable with
 the dataset manifest's entropy floor.
 
@@ -124,6 +124,14 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
     floor = data.entropy_floor
     model = build_model(cfg.model, data.tokenizer).to(device)
     optimizer = make_optimizer(model, cfg.train)
+    scheduler = (
+        torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=cfg.train.lr_plateau_factor,
+            patience=cfg.train.lr_plateau_patience, threshold=cfg.train.lr_plateau_threshold,
+            threshold_mode="abs", min_lr=cfg.train.lr * cfg.train.min_lr_frac, eps=0.,
+        ) if cfg.train.lr_scheduler == "plateau" else None
+    )
+    lr_reductions = 0
 
     use_amp = device.type == "cuda"
     amp_dtype = torch.bfloat16
@@ -159,6 +167,8 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
     )
     if cfg.train.early_stopping_patience and valid_sampler is None:
         raise ValueError("early stopping requires a non-empty validation split")
+    if scheduler is not None and valid_sampler is None:
+        raise ValueError("plateau LR scheduling requires a non-empty validation split")
 
     latest_path = out_dir / "latest.pt"
     should_resume = cfg.train.resume in ("auto", "require") and latest_path.exists()
@@ -177,6 +187,11 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
         _validate_resume_checkpoint(checkpoint, cfg, data)
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
+        if scheduler is not None:
+            if checkpoint.get("lr_scheduler_state") is None:
+                raise ValueError("plateau checkpoint has no LR scheduler state; use a new out_dir")
+            scheduler.load_state_dict(checkpoint["lr_scheduler_state"])
+            lr_reductions = int(checkpoint["lr_reductions"])
         start_step = int(checkpoint["step"])
         best_valid = float(checkpoint.get("best_valid_bits_per_token", float("inf")))
         early_stopping = EarlyStopping(**checkpoint.get("early_stopping", {}))
@@ -204,6 +219,13 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
         print(f"              train windows: {n_train_windows}  tokens: {data.token_counts()}")
         print(f"entropy floor {floor if floor is None else f'{floor:.4f}'} bits/token")
         print(f"out_dir       {out_dir}")
+        print(f"lr scheduler  {cfg.train.lr_scheduler}")
+        if scheduler is not None:
+            print(f"              factor={cfg.train.lr_plateau_factor} "
+                  f"patience={cfg.train.lr_plateau_patience} validation checks, "
+                  f"threshold={cfg.train.lr_plateau_threshold} b/t, "
+                  f"floor={cfg.train.lr * cfg.train.min_lr_frac:.2e}; "
+                  "early stopping starts at the LR floor")
         if cfg.train.early_stopping_patience:
             print(f"early stop    patience={cfg.train.early_stopping_patience} validation checks, "
                   f"min_delta={cfg.train.early_stopping_min_delta} b/t")
@@ -230,6 +252,9 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
             "history": [],
             "max_steps": cfg.train.max_steps,
             "stopped_early": early_stopping.stopped,
+            "lr_scheduler": cfg.train.lr_scheduler,
+            "lr_reductions": lr_reductions,
+            "final_lr": optimizer.param_groups[0]["lr"],
             "stop_reason": "early_stopping" if early_stopping.stopped else "max_steps",
             "qa_packing": QA_PACKING_VERSION if data.tokenizer.include_separator else None,
         }
@@ -247,7 +272,9 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
     completed_steps = start_step
 
     for step in range(start_step, cfg.train.max_steps):
-        lr = lr_at(step, cfg.train)
+        lr = (lr_at(step, cfg.train) if scheduler is None or step < cfg.train.warmup
+              else cfg.train.lr if step == cfg.train.warmup
+              else optimizer.param_groups[0]["lr"])
         for group in optimizer.param_groups:
             group["lr"] = lr
 
@@ -284,6 +311,7 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
             completed_steps % cfg.train.eval_every == 0 or is_last or step == 0
         )
         valid_bits = None
+        lr_reduced = False
         if do_eval:
             valid_bits = bits_per_token(
                 model,
@@ -294,7 +322,21 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
             if valid_bits < best_valid:
                 best_valid = valid_bits
                 save_checkpoint(out_dir / "best.pt", model, cfg, step + 1, valid_bits)
-            if cfg.train.early_stopping_patience:
+            if scheduler is not None and step >= cfg.train.warmup:
+                if not math.isfinite(valid_bits):
+                    raise ValueError("validation loss must be finite for plateau LR scheduling")
+                scheduler.step(valid_bits)
+                lr_reduced = optimizer.param_groups[0]["lr"] < lr
+                lr_reductions += int(lr_reduced)
+                if lr_reduced and verbose:
+                    print(f"LR reduction  step {completed_steps}: {lr:.2e} -> "
+                          f"{optimizer.param_groups[0]['lr']:.2e} (validation plateau)", flush=True)
+            at_lr_floor = optimizer.param_groups[0]["lr"] <= cfg.train.lr * cfg.train.min_lr_frac
+            if scheduler is not None and (step < cfg.train.warmup or lr_reduced or not at_lr_floor):
+                # Give the final reduced LR a fresh, complete patience period.
+                # best.pt remains selected independently using the global minimum.
+                early_stopping = EarlyStopping(best=valid_bits)
+            elif cfg.train.early_stopping_patience:
                 early_stopping.update(valid_bits, cfg.train)
 
         if (step + 1) % cfg.train.log_every == 0 or is_last or step == 0 or do_eval:
@@ -306,6 +348,14 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
                 "elapsed_s": time.time() - start_time,
                 "early_stopping_bad_checks": early_stopping.bad_checks,
             }
+            record["lr_scheduler"] = {
+                "type": cfg.train.lr_scheduler,
+                "next_lr": optimizer.param_groups[0]["lr"],
+                "reduced": lr_reduced,
+                "reductions": lr_reductions,
+            }
+            if scheduler is not None:
+                record["lr_scheduler"]["bad_checks"] = scheduler.num_bad_epochs
             history.append(record)
             tracker.log_training(record)
             with metrics_path.open("a", encoding="utf-8") as fh:
@@ -331,6 +381,8 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
                 best_valid,
                 sampler,
                 early_stopping_state=asdict(early_stopping),
+                lr_scheduler_state=None if scheduler is None else scheduler.state_dict(),
+                lr_reductions=lr_reductions,
             )
             if verbose:
                 print(f"checkpoint    {latest_path}  (step {step + 1})", flush=True)
@@ -350,6 +402,9 @@ def _train(cfg: Config, verbose: bool, tracker: RunTracker) -> dict:
         "stop_reason": "early_stopping" if early_stopping.stopped else "max_steps",
         "qa_packing": QA_PACKING_VERSION if data.tokenizer.include_separator else None,
         "early_stopping_bad_checks": early_stopping.bad_checks,
+        "lr_scheduler": cfg.train.lr_scheduler,
+        "lr_reductions": lr_reductions,
+        "final_lr": optimizer.param_groups[0]["lr"],
         "first_train_bits_per_token": first_train_bits,
         "last_train_bits_per_token": last_train_bits,
         "best_valid_bits_per_token": None if best_valid == float("inf") else best_valid,
@@ -461,6 +516,11 @@ def _resume_signature(cfg: Config) -> dict:
     # Omit the default field so legacy checkpoints keep their exact signature.
     if train.lr_decay_steps is not None:
         signature["train"]["lr_decay_steps"] = train.lr_decay_steps
+    if train.lr_scheduler != "cosine":
+        signature["train"].update({key: getattr(train, key) for key in (
+            "lr_scheduler", "lr_plateau_factor", "lr_plateau_patience", "lr_plateau_threshold",
+            "eval_every", "eval_batches",
+        )})
     if train.early_stopping_patience:
         signature["stopping"] = {
             key: getattr(train, key) for key in (
@@ -481,6 +541,8 @@ def save_training_checkpoint(
     best_valid: float,
     sampler: BatchSampler | None,
     early_stopping_state: dict | None = None,
+    lr_scheduler_state: dict | None = None,
+    lr_reductions: int = 0,
 ) -> None:
     """Write the complete state required to continue training."""
     _atomic_torch_save(
@@ -496,6 +558,8 @@ def save_training_checkpoint(
             "best_valid_bits_per_token": best_valid,
             "train_sampler": None if sampler is None else sampler.state_dict(),
             "early_stopping": early_stopping_state or asdict(EarlyStopping()),
+            "lr_scheduler_state": lr_scheduler_state,
+            "lr_reductions": lr_reductions,
             "rng_state": _rng_state(),
         },
         path,

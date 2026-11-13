@@ -1,9 +1,12 @@
 """Independent cosine horizon, floor holding, and checkpoint compatibility."""
 
 import sys
+import runpy
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -38,6 +41,44 @@ class LRScheduleTests(unittest.TestCase):
         for value in (0, -1, True, 1.5, "20000", 100):
             with self.subTest(value=value), self.assertRaises(ConfigError):
                 TrainConfig(lr_decay_steps=value)
+
+    def test_plateau_config_roundtrip_and_signature(self):
+        cfg = Config(train=TrainConfig(lr_scheduler="plateau", lr_plateau_factor=.5,
+                     lr_plateau_patience=4, lr_plateau_threshold=.0001))
+        raw = cfg.to_dict()
+        raw.pop("path")
+        self.assertEqual(parse_config(raw).train, cfg.train)
+        self.assertNotEqual(_resume_signature(cfg), _resume_signature(Config()))
+        self.assertNotEqual(_resume_signature(cfg),
+                            _resume_signature(replace(cfg, train=replace(cfg.train, eval_batches=99))))
+        self.assertNotIn("lr_scheduler", _resume_signature(Config())["train"])
+        for kwargs in ({"lr_scheduler": "unknown"}, {"lr_plateau_factor": 1.},
+                       {"lr_plateau_factor": 0.}, {"lr_plateau_factor": float("nan")},
+                       {"lr_plateau_patience": -1}, {"lr_plateau_patience": True},
+                       {"lr_plateau_threshold": float("nan")},
+                       {"lr_scheduler": "plateau", "min_lr_frac": 0.},
+                       {"lr_scheduler": "plateau", "lr_decay_steps": 20000}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ConfigError):
+                TrainConfig(**kwargs)
+
+    def test_train_cli_passes_plateau_options_to_training(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.yaml"
+            path.write_text("train:\n  max_steps: 50000\n")
+            command = ["train.py", str(path), "--lr-scheduler", "plateau",
+                       "--lr-plateau-factor", "0.4", "--lr-plateau-patience", "6",
+                       "--lr-plateau-threshold", "0.0002"]
+            with patch.object(sys, "argv", command), patch.object(sys, "path", list(sys.path)), \
+                 patch("train.train") as run:
+                with self.assertRaises(SystemExit) as exit:
+                    runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/train.py"),
+                                   run_name="__main__")
+                self.assertEqual(exit.exception.code, 0)
+            cfg = run.call_args.args[0]
+            self.assertEqual(cfg.train.lr_scheduler, "plateau")
+            self.assertEqual(cfg.train.lr_plateau_factor, .4)
+            self.assertEqual(cfg.train.lr_plateau_patience, 6)
+            self.assertEqual(cfg.train.lr_plateau_threshold, .0002)
 
 
 if __name__ == "__main__":
