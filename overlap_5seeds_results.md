@@ -238,38 +238,4 @@ Mean ± sample SD of semantic success within each indicated test subgroup, acros
 | Suffix | 1.8M | 11.08 ± 5.54 | 13.76 ± 9.59 | 17.52 ± 10.35 | 0.42 ± 0.76 | 0.00 ± 0.00 |
 | Suffix | 2.0M | 8.72 ± 2.27 | 12.20 ± 3.06 | 14.87 ± 3.26 | 0.07 ± 0.16 | 0.00 ± 0.00 |
 
-## 8. Heatmap inclusion and normalization
-
-Training heatmaps count the complete semantic training split once. Each pooled output panel represents 5,000 generation attempts, but edges are counted only from uniquely attributed paths. Valid edges in unambiguously decoded invalid walks are included; invalid jumps are not part of the heatmap normalization. Repeated traversals count again.
-
-| Code type | Training pairs | Generation attempts | Paths contributing edges | Undecodable excluded | Ambiguous ownership excluded | Valid edge occurrences |
-|---|---:|---:|---:|---:|---:|---:|
-| Prefix | 1.2M | 5,000 | 2,970 | 1,772 | 258 | 86,153 |
-| Prefix | 1.4M | 5,000 | 3,299 | 1,501 | 200 | 102,104 |
-| Prefix | 1.6M | 5,000 | 3,171 | 1,588 | 241 | 95,117 |
-| Prefix | 1.8M | 5,000 | 3,444 | 1,435 | 121 | 106,352 |
-| Prefix | 2.0M | 5,000 | 3,203 | 1,575 | 222 | 102,626 |
-| Suffix | 1.2M | 5,000 | 3,561 | 1,147 | 292 | 96,942 |
-| Suffix | 1.4M | 5,000 | 3,718 | 1,109 | 173 | 101,752 |
-| Suffix | 1.6M | 5,000 | 3,766 | 1,006 | 228 | 102,254 |
-| Suffix | 1.8M | 5,000 | 4,148 | 736 | 116 | 114,545 |
-| Suffix | 2.0M | 5,000 | 3,734 | 1,033 | 233 | 100,756 |
-
-The pooled comparison figures use the original continuous **yellow–orange–red (YlOrRd)** style and one global normalized frequency scale. Original individual plots are preserved and share a scale within each training/output pair. No difference map is included.
-
-## Sources and downloads
-
-Collected read-only from `172.19.125.12:37195`, container `tuanha`, on 2026-11-14. Training and evaluation completion markers were verified for all 50 runs. No training, generation or GPU workload was started, stopped or rerun during this collection.
-
-- [Heatmap index and individual reports](E:/tuanha/programming/synthetic-language/overlap_heatmaps_full_20261114/README.md)
-- [All-budget heatmap overview](E:/tuanha/programming/synthetic-language/overlap_heatmaps_full_20261114/overview.png)
-- [Full aggregate counts, per-seed metrics and diagnostics](E:/tuanha/programming/synthetic-language/overlap_heatmaps_full_20261114/summary.json)
-- [Download manifest and server-side SHA-256 checksums](E:/tuanha/programming/synthetic-language/overlap_heatmaps_full_20261114/download_manifest.json)
-- [1.2M training pairs — training, prefix output and suffix output](E:/tuanha/programming/synthetic-language/overlap_heatmaps_full_20261114/comparison_1200000pairs.png)
-- [1.4M training pairs — training, prefix output and suffix output](E:/tuanha/programming/synthetic-language/overlap_heatmaps_full_20261114/comparison_1400000pairs.png)
-- [1.6M training pairs — training, prefix output and suffix output](E:/tuanha/programming/synthetic-language/overlap_heatmaps_full_20261114/comparison_1600000pairs.png)
-- [1.8M training pairs — training, prefix output and suffix output](E:/tuanha/programming/synthetic-language/overlap_heatmaps_full_20261114/comparison_1800000pairs.png)
-- [2.0M training pairs — training, prefix output and suffix output](E:/tuanha/programming/synthetic-language/overlap_heatmaps_full_20261114/comparison_2000000pairs.png)
-
-The local folder contains 100 downloaded individual heatmaps, 50 full evaluation reports, training summaries and model configs. Six pooled plots and the aggregate JSON were generated locally from saved counts, giving **106 heatmaps total**. All local results are Git-ignored.
 
